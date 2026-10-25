@@ -89,6 +89,57 @@ def test_policy_all_zero_ends_turn():
         print("PASS policy fallback end_turn")
 
 
+def test_incoming_damage():
+    from policy import incoming_damage
+
+    st = {"enemies": [
+        {"hp": 10, "attacks": [{"type": 0, "power": 6}, {"type": 1, "power": 16}]},
+        {"hp": 10, "attacks": [{"type": 0, "power": 9}]},
+        {"hp": 10, "attacks": [{"type": 0, "power": 5, "hidden": True}]},
+    ]}
+    # 6 + 9 = 15；type=1(block) 不算，hidden 不算
+    assert incoming_damage(st) == 15, incoming_damage(st)
+    assert incoming_damage({"enemies": []}) == 0
+    assert incoming_damage({"enemies": [{"hp": 5}]}) == 0
+    print("PASS incoming damage")
+
+
+def test_block_value():
+    from policy import _block_value
+
+    assert _block_value(5, 0, 40) == 0        # 没人打你，盾不值钱
+    assert _block_value(5, 9, 40) == 5        # 正常挡
+    assert _block_value(20, 9, 40) == 9       # 挡超出部分是浪费，截到 9
+    assert _block_value(5, 20, 10) == 10      # 这一击会死 -> 紧急翻倍
+    assert _block_value(0, 9, 40) == 0
+    print("PASS block value")
+
+
+def test_block_item_preferred_when_threatened():
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("Sword", 6, 0)
+        led.record_use("Buckler", 0, 8)
+        items = [
+            {"uid": "i1", "name": "Sword", "energy_cost": 1},
+            {"uid": "i2", "name": "Buckler", "energy_cost": 1},
+        ]
+
+        # 敌人只是在加盾：没有威胁 -> 用剑
+        st = state_with(items, enemy_hp=40)
+        st["enemies"][0]["attacks"] = [{"type": 1, "power": 5}]
+        act, why = choose(st, led, set())
+        assert act["uid"] == "i1", why
+
+        # 敌人要打 9：盾的有效价值 8 > 剑的 6 -> 用盾
+        st2 = state_with(items, enemy_hp=40)
+        st2["enemies"][0]["attacks"] = [{"type": 0, "power": 9}]
+        act, why = choose(st2, led, set())
+        assert act["uid"] == "i2", why
+        assert "eff_block" in why, why
+        print("PASS block item preferred when threatened")
+
+
 def test_no_legal():
     led = Ledger(Path(tempfile.gettempdir()) / "_bph_nonexistent.json")
     st = {"mode": "battle", "legal": [], "backpack": {"items": []}, "enemies": [], "player": {}}
@@ -137,6 +188,9 @@ if __name__ == "__main__":
     test_policy_explore_then_known()
     test_policy_all_zero_ends_turn()
     test_no_legal()
+    test_incoming_damage()
+    test_block_value()
+    test_block_item_preferred_when_threatened()
     test_damage_from_delta()
     test_absorbed()
     test_ledger_absorbed()
