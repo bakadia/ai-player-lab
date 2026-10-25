@@ -11,7 +11,7 @@
 | 动作能不能执行 | **未验证**。候选方法已定位（见 §6），但一条都还没在游戏里真调过 |
 | 能不能无人值守打一场 | **未验证**。前提是先把上面两条跑通 |
 | 本机能不能编译 mod | **能**。但不用 `dotnet`/`msbuild`（都不完整），用 `csc`；`bridge/build.ps1` 已跑通 |
-| MelonLoader 装好了吗 | 装好了、DLL 也放进 `Mods/` 了，但**游戏从没启动过**：`MelonLoader/Latest.log` 是 0 字节，时间戳 = 安装时间 |
+| MelonLoader 装好了吗 | 装好了；2026-10-25 23:27 首次启动成功，`1 Mod loaded.` + `[BphBridge] BphBridge loaded.`（见 §10） | D1 上午已过 |
 
 **一句话**：D1 下午的「定位类、dump 一场战斗」这一步，静态部分做完了；剩下的都是要开着游戏才能验的。
 
@@ -219,10 +219,26 @@ Get-Item 'E:\steam\steamapps\common\Backpack Hero\MelonLoader\Latest.log' | Sele
 
 ---
 
-## 10. 下一步（可执行）
+## 10. hello mod 验收（2026-10-25 23:27 通过 ✅）
 
-1. **启动一次游戏**，确认 `Latest.log` 里有 `BphBridge loaded. game=Backpack Hero`。
-   到这一步为止，MVP §5.1 的 D1 上午才算完。
+修掉 `MelonGame` 开发者名（见 `PITFALLS.md` E1）后，日志：
+
+```
+[23:27:35.849] Melon Assembly loaded: '.\Mods\BphBridge.dll'
+[23:27:35.849] SHA256 Hash: '33969E4D...'
+[23:27:35.867] BphBridge v0.0.1  by ai-player-lab
+[23:27:35.867] 1 Mod loaded.
+[23:27:35.878] [BphBridge] BphBridge loaded. game=Backpack Hero
+```
+
+`1 Mod loaded` + 我们自己 `OnInitializeMelon` 打的那行都出来了。
+**MVP §5.1 的 D1 上午到此完成。**
+
+---
+
+## 11. 下一步（可执行）
+
+1. ~~启动一次游戏，确认 `Latest.log` 里有 `BphBridge loaded. game=Backpack Hero`~~ ✅ 已完成。
 2. 把 `BridgeMod.cs` 写成真的 `OnUpdate` 循环：读 `GameManager.main` / `Player.main` /
    `GameFlowManager.main`，原子写 `runtime/state.json`，带 `seq`。
 3. 用一个 `dump` 命令把 §3 的每一行都真实读一遍，对不上的就地修正——**这一步能一次性验掉 §7 的 1、5、6**。
