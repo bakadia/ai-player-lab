@@ -229,29 +229,24 @@ namespace BphBridge
                     catch { }
 
                     // ---- 合法性与原因 ----
-                    // 主判据用游戏自己的 Item2.CanBeUsedActive()，不再靠手写启发式。
-                    // 起因：合金(ALLOY) 是遗物（被动），playType 却是 Active(0)、
-                    // energy_cost=0，被旧规则误判成「可用动作」，用了什么都不发生。
+                    // 主判据暂时仍用手写规则。原因：Item2.CanBeUsedActive 的 costs
+                    // 参数是「入参」不是输出——传空表让它对所有物品都返回 false
+                    // （实测 WOODEN SWORD 也变成 0，而它上一轮明明能用）。
+                    // 游戏判断现在只作诊断信号输出，等搞清正确用法再切成主判据。
                     bool isRelic = IsRelic(it);
                     int canActive = -1;
                     if (inPlayerTurn) canActive = TryCanUseActive(it);
 
                     string reason = null;
-                    bool usable = false;
                     if (!inPlayerTurn) reason = "not_player_turn";
                     else if (isRelic) reason = "relic_passive";
-                    else if (canActive == 0) reason = "game_says_no";
-                    else if (canActive == 1) usable = true;     // 游戏说行就信它
-                    else
-                    {
-                        // CanBeUsedActive 调用失败，退回启发式
-                        if (iplaytype != 0) reason = "not_active_item";
-                        else if (imaxcharges != -999 && icharges <= 0) reason = "no_charges";
-                        else if (energyCost > playerEnergy) reason = "no_energy";
-                        else if (manaCost > 0) reason = "needs_mana";
-                        else if (goldCost > 0) reason = "needs_gold";
-                        usable = reason == null;
-                    }
+                    else if (iplaytype != 0) reason = "not_active_item";
+                    else if (imaxcharges != -999 && icharges <= 0) reason = "no_charges";
+                    else if (energyCost > playerEnergy) reason = "no_energy";
+                    else if (manaCost > 0) reason = "needs_mana";
+                    else if (goldCost > 0) reason = "needs_gold";
+
+                    bool usable = reason == null;
 
                     if (usable)
                     {
@@ -371,14 +366,18 @@ namespace BphBridge
         }
 
         /// <summary>
-        /// 问游戏自己：这件物品现在能不能主动用。
-        /// 返回 1=能 0=不能 -1=调用失败（调用方退回启发式）。
+        /// 问游戏自己：这件物品现在能不能主动用。返回 1=能 0=不能 -1=调用失败。
+        /// 注意 costs 要传物品自己的费用列表（拷贝后再传，别让它改到游戏状态）。
+        /// 目前只作诊断信号，主判据仍是手写规则——见调用处注释。
         /// </summary>
         private static int TryCanUseActive(Item2 it)
         {
             try
             {
+                List<Item2.Cost> src = it.costs;
                 List<Item2.Cost> costs = new List<Item2.Cost>();
+                if (src != null) costs.AddRange(src);
+
                 List<SpecificConditionToUse.ConditionTime> times =
                     new List<SpecificConditionToUse.ConditionTime>();
                 bool ok = it.CanBeUsedActive(false, costs, true, false, times, true);
