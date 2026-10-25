@@ -17,3 +17,4 @@ games/*/data/runs/
 
 # 本机
 *.log
+*.bak
