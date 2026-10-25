@@ -119,3 +119,26 @@ UTF-8 的中文字节被当成 GBK 解码后，可能吞掉后面的换行符或
 - 构建/测试脚本一律 **纯 ASCII**（`bridge/build.ps1`、`tests/run-tests.ps1` 都是）。
 - 写完脚本可以验一下：`(Get-Content -Encoding Byte x.ps1 | Where-Object {$_ -gt 127}).Count` 应为 0。
 - 中文说明写在 `.md` 和 `.cs` 里；`.cs` 靠 csc 的 `/codepage:65001` 保证按 UTF-8 读。
+
+## E7 · 跨进程文件刚写完就读，会瞬时 PermissionError
+
+**怎么发现的**：`run.py` 崩过：
+
+```
+PermissionError: [Errno 13] Permission denied: ...runtime\ack\995516.json
+```
+
+但紧接着用 `Get-Content` 读同一个文件，**一切正常**。
+
+**为什么**：游戏进程刚把 ack 文件写出来，Windows 上那一瞬间安全描述符还没完全落定，
+python 正好撞上。是**瞬时竞争**，不是权限配错、也不是文件锁。
+
+**为什么坑**：它出现得极不规律——之前几十次都正常，只有跑得快、文件刚落地时才撞上。
+而且报的是 PermissionError，很容易让人去查 ACL，方向全错。
+
+**以后怎么办**：
+
+- 跨进程文件交接，读的一方要**容忍瞬时失败**：`FileNotFoundError` 和
+  `PermissionError` 一样当「还没好，再等等」处理，统一用 `OSError` 捕获。
+- 判据：**同一个文件手动能读、程序刚读失败** → 基本就是瞬时竞争，别去动权限。
+- 写的一方用「临时文件 + 原子替换」只是必要条件，不能保证读者那一瞬间一定成功。

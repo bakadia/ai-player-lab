@@ -226,6 +226,9 @@ namespace BphBridge
         /// 所以额外要求 battlePhase 回到 playerTurn(1) 或 outOfBattle(0)。
         /// </summary>
         public bool WaitPlayerTurn;
+
+        /// <summary>整理阶段：点完「结束整理」要等 inventoryPhase 退出 specialReorganization。</summary>
+        public bool WaitReorg;
     }
 
     internal static class Actions
@@ -241,6 +244,18 @@ namespace BphBridge
                 if (gf == null) return true;
                 int p = (int)gf.battlePhase;
                 return p == 0 || p == 1;
+            }
+            catch { return true; }
+        }
+
+        /// <summary>整理阶段是否已经退出（inventoryPhase != specialReorganization(3)）。</summary>
+        public static bool ReorganizeFinished()
+        {
+            try
+            {
+                GameManager gm = GameManager.main;
+                if (gm == null) return true;
+                return (int)gm.inventoryPhase != 3;
             }
             catch { return true; }
         }
@@ -304,6 +319,24 @@ namespace BphBridge
                 GameFlowManager gf = GameFlowManager.main;
                 if (gf == null) throw new InvalidOperationException("GameFlowManager.main is null");
                 gf.EndTurn();
+                return;
+            }
+
+            // 整理阶段（中污染/诅咒时进入）：摆好后必须点「结束整理」才继续。
+            // GameManager 上有 finishReorganizingButton，onClick 绑的就是这个方法。
+            if (type == "finish_reorganize")
+            {
+                GameManager gm = GameManager.main;
+                if (gm == null) throw new InvalidOperationException("GameManager.main is null");
+                gm.FinishReorganizeButton();
+                return;
+            }
+
+            if (type == "skip_reorganize")
+            {
+                GameManager gm = GameManager.main;
+                if (gm == null) throw new InvalidOperationException("GameManager.main is null");
+                gm.SkipReorganizeButton();
                 return;
             }
 

@@ -47,12 +47,16 @@ class Bridge:
     # ---------- 读状态 ----------
 
     def state(self, retries: int = 20) -> dict[str, Any]:
-        """读一份 state。文件正被替换时会短暂读到半截，重试即可。"""
+        """读一份 state。文件正被替换时会短暂读到半截，重试即可。
+
+        PermissionError 也要重试：游戏进程刚写出来的文件，在 Windows 上
+        可能有一瞬间 ACL 还没落定，读取会被拒绝（实测踩到，见 PITFALLS E7）。
+        """
         last: Exception | None = None
         for _ in range(retries):
             try:
                 return json.loads(self.state_path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError) as exc:
+            except (OSError, json.JSONDecodeError) as exc:
                 last = exc
                 time.sleep(0.01)
         raise BridgeError(f"cannot read state.json: {last}")
@@ -102,7 +106,9 @@ class Bridge:
         while time.monotonic() < deadline:
             try:
                 ack = json.loads(ack_path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError):
+            except (OSError, json.JSONDecodeError):
+                # OSError 覆盖 FileNotFoundError 和 PermissionError：
+                # 文件可能还没出现，也可能刚出现但 ACL 未落定（PITFALLS E7）
                 time.sleep(0.02)
                 continue
             try:

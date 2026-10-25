@@ -103,12 +103,16 @@ def main(argv: list[str] | None = None) -> int:
                 print("玩家已阵亡，结束")
                 break
 
-            if mode != "battle":
-                print(f"离开战斗（mode={mode}），本 runner 只处理战斗，停在这里")
+            if mode not in ("battle", "reorganize"):
+                print(f"离开战斗（mode={mode}），本 runner 只处理战斗/整理，停在这里")
                 record({"event": "leave_battle", "mode": mode, "seq": st.get("seq")})
                 break
 
-            if not enemies:
+            if mode == "reorganize":
+                # 中污染/诅咒会强制进整理阶段，不点掉「结束整理」整局就卡住
+                print("  进入整理阶段（污染/诅咒），准备点「结束整理」")
+
+            if mode == "battle" and not enemies:
                 print("战斗里没有存活敌人（可能在结算动画），等下一帧")
                 time.sleep(0.3)
                 steps += 1

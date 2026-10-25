@@ -121,7 +121,9 @@ namespace BphBridge
                 pc.LastBody = pc.BeforeBody;
                 pc.StartTime = now;
                 pc.LastChangeTime = now;
-                pc.WaitPlayerTurn = MiniJson.Str(pc.Action, "type", "") == "end_turn";
+                string atype = MiniJson.Str(pc.Action, "type", "");
+                pc.WaitPlayerTurn = atype == "end_turn";
+                pc.WaitReorg = atype == "finish_reorganize" || atype == "skip_reorganize";
 
                 try
                 {
@@ -147,6 +149,7 @@ namespace BphBridge
             bool settled = (now - _pending.LastChangeTime) >= Actions.SettleSeconds;
             bool timedOut = elapsedMs >= _pending.TimeoutMs;
             bool phaseReady = !_pending.WaitPlayerTurn || Actions.PhaseIsPlayerOrIdle();
+            if (_pending.WaitReorg) phaseReady = phaseReady && Actions.ReorganizeFinished();
 
             if (settled && phaseReady)
             {

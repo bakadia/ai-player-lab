@@ -77,6 +77,10 @@ def score_action(
     if action.get("type") == "end_turn":
         return 0.0, "end_turn baseline"
 
+    # 整理阶段（中污染/诅咒）：这不是可选战术，是流程阻塞点，必须点掉。
+    if action.get("type") in ("finish_reorganize", "skip_reorganize"):
+        return 1.0, f"{action.get('type')}: unblock the reorganize phase"
+
     uid = action.get("uid", "")
     item = _items_by_uid(state).get(uid)
     if item is None:

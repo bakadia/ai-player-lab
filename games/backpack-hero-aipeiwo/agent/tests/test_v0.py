@@ -140,6 +140,24 @@ def test_block_item_preferred_when_threatened():
         print("PASS block item preferred when threatened")
 
 
+def test_reorganize_action():
+    from policy import choose
+
+    led = Ledger(Path(tempfile.gettempdir()) / "_bph_nonexistent.json")
+    st = {
+        "mode": "reorganize",
+        "inventory_phase": 3,
+        "player": {"hp": 55, "energy": 3},
+        "enemies": [],
+        "backpack": {"items": []},
+        "legal": [{"type": "finish_reorganize"}, {"type": "skip_reorganize"}],
+    }
+    act, why = choose(st, led, set())
+    assert act["type"] in ("finish_reorganize", "skip_reorganize"), (act, why)
+    assert "reorganize" in why, why
+    print("PASS reorganize action")
+
+
 def test_no_legal():
     led = Ledger(Path(tempfile.gettempdir()) / "_bph_nonexistent.json")
     st = {"mode": "battle", "legal": [], "backpack": {"items": []}, "enemies": [], "player": {}}
@@ -188,6 +206,7 @@ if __name__ == "__main__":
     test_policy_explore_then_known()
     test_policy_all_zero_ends_turn()
     test_no_legal()
+    test_reorganize_action()
     test_incoming_damage()
     test_block_value()
     test_block_item_preferred_when_threatened()

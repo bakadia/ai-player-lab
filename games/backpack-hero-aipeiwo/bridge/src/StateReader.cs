@@ -63,7 +63,7 @@ namespace BphBridge
             w.Prop("seq", seq);
             w.Prop("ts", ts);
             w.Prop("scene", scene);
-            w.Prop("mode", DeriveMode(gm, pl, battlePhase));
+            w.Prop("mode", DeriveMode(gm, pl, battlePhase, invPhase));
             w.Prop("battle_phase", battlePhase);
             w.Prop("inventory_phase", invPhase);
 
@@ -322,7 +322,21 @@ namespace BphBridge
 
             // ---- 合法动作（Bridge 算，Agent 不猜） ----
             w.Name("legal").BeginArray();
-            if (inPlayerTurn)
+            if (invPhase == 3)
+            {
+                // 整理阶段：摆好之后必须点「结束整理」才会继续。
+                // 入口是 GameManager.FinishReorganizeButton()（同名 GameObject 的 onClick）。
+                w.BeginObject();
+                w.Prop("type", "finish_reorganize");
+                w.EndObject();
+                if (B(delegate { return gm.skippableReorganization; }, false))
+                {
+                    w.BeginObject();
+                    w.Prop("type", "skip_reorganize");
+                    w.EndObject();
+                }
+            }
+            else if (inPlayerTurn)
             {
                 for (int i = 0; i < legalUses.Count; i++)
                 {
@@ -422,12 +436,17 @@ namespace BphBridge
         }
 
         /// <summary>
-        /// mode 是启发式：SPIKE-01 §7 还没定死「非战斗」怎么区分。
-        /// 原始枚举值同时输出，等看到真实数据再收窄。
+        /// mode 是启发式。已知的三个：
+        ///   menu     —— 单例还没建出来（主菜单）
+        ///   reorganize —— inventoryPhase == specialReorganization(3)
+        ///                 中污染/诅咒时会进这个阶段，等玩家摆好再点「结束整理」
+        ///   battle   —— battlePhase 1..4
+        ///   map      —— 其余
         /// </summary>
-        private static string DeriveMode(GameManager gm, Player pl, int battlePhase)
+        private static string DeriveMode(GameManager gm, Player pl, int battlePhase, int invPhase)
         {
             if (gm == null || pl == null) return "menu";
+            if (invPhase == 3) return "reorganize";
             if (battlePhase >= 1 && battlePhase <= 4) return "battle";
             int floor = I(delegate { return gm.floor; }, 0);
             if (floor <= 0) return "menu";
