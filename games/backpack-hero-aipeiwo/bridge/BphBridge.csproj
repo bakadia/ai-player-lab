@@ -48,6 +48,9 @@
 
   <ItemGroup>
     <Compile Include="src\BridgeMod.cs" />
+    <Compile Include="src\Json.cs" />
+    <Compile Include="src\RuntimePaths.cs" />
+    <Compile Include="src\StateReader.cs" />
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

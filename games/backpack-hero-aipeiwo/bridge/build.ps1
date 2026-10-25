@@ -1,16 +1,23 @@
-# 构建 BphBridge.dll —— 不依赖 .NET SDK / MSBuild。
+# Build BphBridge.dll without .NET SDK / MSBuild.
 #
-# 本机现状（2026-10-25 实测）：
-#   dotnet build  -> 无 .NET SDK（C:\Program Files\dotnet\sdk 不存在，只有 runtime）
-#   msbuild       -> 有 VS2022 MSBuild，但没装 Roslyn 组件
-#                    (MSBuild\Current\Bin\Roslyn\Microsoft.CSharp.Core.targets 缺失)
-#   csc.exe       -> Windows 自带 .NET Framework csc 可用，语言版本上限 C# 5
+# Machine state (verified 2026-10-25):
+#   dotnet build  -> no .NET SDK (only runtime installed)
+#   msbuild       -> VS2022 MSBuild exists but the Roslyn component is missing
+#                    (MSBuild\Current\Bin\Roslyn\Microsoft.CSharp.Core.targets absent)
+#   csc.exe       -> Windows .NET Framework csc works, C# 5 max
 #
-# 所以统一用 csc 直接编译；BphBridge.csproj 保留做参照/IDE 用，
-# 它引用的程序集和这里一一对应。
+# So we compile with csc directly. BphBridge.csproj is kept for reference/IDE only.
+#
+# IMPORTANT: references must come from the GAME's own BCL, not the system
+# .NET Framework. Assembly-CSharp.dll is built against netstandard 2.1, so its
+# public API surface points List<T>/System.Object/System.Enum at netstandard.
+# Compiling against the system mscorlib fails with CS0012.
+#
+# This file is ASCII-only on purpose: Windows PowerShell 5.1 decodes BOM-less
+# scripts using the OEM/ANSI code page, and non-ASCII comments can corrupt parsing.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
-#   powershell ... -File .\build.ps1 -Deploy      # 顺便拷进游戏的 Mods/
+#   powershell ... -File .\build.ps1 -Deploy
 
 [CmdletBinding()]
 param(
@@ -19,7 +26,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 
 $root = $PSScriptRoot
 if (-not $root) { $root = Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -30,7 +36,6 @@ if (-not (Test-Path $GameDir)) { throw "game dir not found: $GameDir" }
 $managed = Join-Path $GameDir 'Backpack Hero_Data\Managed'
 $melon   = Join-Path $GameDir 'MelonLoader\net472'
 $csc     = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-$fw      = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 
 foreach ($p in $csc, $managed, $melon) {
     if (-not (Test-Path $p)) { throw "missing: $p" }
@@ -44,16 +49,20 @@ $sources = @(Get-ChildItem (Join-Path $root 'src') -Filter *.cs -Recurse | ForEa
 if ($sources.Count -eq 0) { throw "no .cs found under $root\src" }
 
 $refs = @(
+    (Join-Path $managed 'mscorlib.dll')
+    (Join-Path $managed 'netstandard.dll')
+    (Join-Path $managed 'System.dll')
+    (Join-Path $managed 'System.Core.dll')
     (Join-Path $melon   'MelonLoader.dll')
     (Join-Path $managed 'UnityEngine.dll')
     (Join-Path $managed 'UnityEngine.CoreModule.dll')
     (Join-Path $managed 'Assembly-CSharp.dll')
-    (Join-Path $managed 'Newtonsoft.Json.dll')
-    (Join-Path $fw      'System.dll')
-    (Join-Path $fw      'System.Core.dll')
 )
 
-$cscArgs = @('/nologo', '/target:library', '/platform:anycpu', '/optimize+', '/langversion:5', "/out:$out")
+# /noconfig is required: csc otherwise reads csc.rsp from its own directory and
+# auto-references the system System.dll / System.Core.dll, which collides with the
+# game BCL as CS1703 duplicate assembly identity.
+$cscArgs = @('/nologo', '/noconfig', '/target:library', '/platform:anycpu', '/optimize+', '/langversion:5', '/nostdlib+', "/out:$out")
 foreach ($r in $refs) {
     if (-not (Test-Path $r)) { throw "reference not found: $r" }
     $cscArgs += "/r:$r"
