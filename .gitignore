@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# 构建产物 / 本机下载
+.tools/
+**/bin/
+**/obj/
+
+# 运行时
+runtime/
+games/*/runtime/
+data/runs/
+games/*/data/runs/
+
+# 本机
+*.log

@@ -1,0 +1,14 @@
+[project]
+name = "agent-core"
+version = "0.0.1"
+description = "Game-agnostic agent core for the AI Player Lab"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_core*"]
