@@ -67,8 +67,14 @@ class Ledger:
 
     # ---------- 记录 ----------
 
-    def record_use(self, name: str, damage: int, block: int) -> None:
-        """记一次使用效果。damage 为本回合实际造成的总伤害（可能为 0）。"""
+    def record_use(self, name: str, damage: int, block: int, absorbed: int = 0) -> None:
+        """记一次使用效果。
+
+        damage   实际打掉的血
+        block    给自己加的护甲
+        absorbed 被对方格挡吃掉的量——单独记，否则「打中但被挡」会和
+                 「这物品根本没伤害」混成一谈（SPIKE-04 实测踩到）
+        """
         k = self._key(name)
         if not k:
             return
@@ -76,6 +82,8 @@ class Ledger:
         e["samples"] = int(e.get("samples", 0)) + 1
         e["damage_sum"] = int(e.get("damage_sum", 0)) + int(damage)
         e["block_sum"] = int(e.get("block_sum", 0)) + int(block)
+        if absorbed:
+            e["absorbed_sum"] = int(e.get("absorbed_sum", 0)) + int(absorbed)
 
     # ---------- 报告 ----------
 

@@ -100,6 +100,17 @@ namespace BphBridge
                 int now;
                 if (!a.EnemyHp.TryGetValue(kv.Key, out now)) return true;
                 if (now != kv.Value) return true;
+                int nowBlock;
+                if (a.EnemyBlock.TryGetValue(kv.Key, out nowBlock))
+                {
+                    int wasBlock;
+                    EnemyBlock.TryGetValue(kv.Key, out wasBlock);
+                    if (nowBlock != wasBlock) return true;
+                }
+                else if (EnemyBlock.ContainsKey(kv.Key))
+                {
+                    return true;
+                }
             }
             return false;
         }
@@ -163,6 +174,27 @@ namespace BphBridge
                     if (vals[i] is int) w.Value((int)vals[i]);
                     else w.Value((string)vals[i]);
                 }
+                w.EndObject();
+            }
+
+            // 护甲变化单独一组：打中但被格挡时 hp 不变，只有 block 会动。
+            // 不输出这个，agent 会以为「这刀什么也没发生」（SPIKE-04 实测踩到）。
+            List<string> bkeys = new List<string>();
+            List<int> bvals = new List<int>();
+            foreach (KeyValuePair<int, int> kv in EnemyBlock)
+            {
+                int nowBlock;
+                if (!after.EnemyBlock.TryGetValue(kv.Key, out nowBlock)) continue;
+                if (nowBlock != kv.Value)
+                {
+                    bkeys.Add("e" + kv.Key);
+                    bvals.Add(nowBlock - kv.Value);
+                }
+            }
+            if (bkeys.Count > 0)
+            {
+                w.Name("enemies_block").BeginObject();
+                for (int i = 0; i < bkeys.Count; i++) w.Prop(bkeys[i], bvals[i]);
                 w.EndObject();
             }
 

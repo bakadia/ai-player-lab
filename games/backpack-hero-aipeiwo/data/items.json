@@ -1,5 +1,11 @@
 {
-  "items": {},
+  "items": {
+    "WOODEN SWORD": {
+      "block_sum": 0,
+      "damage_sum": 46,
+      "samples": 13
+    }
+  },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用",
   "schema": "bph.items.v1"
 }

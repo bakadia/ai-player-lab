@@ -103,7 +103,33 @@ def test_damage_from_delta():
     assert _damage_from({"enemies": {"e1": "gone"}}) == 0
     assert _damage_from({"enemies": {"e1": 2}}) == 0
     assert _damage_from({}) == 0
+    # 致命一击：delta 里是 "gone"，要用行动前血量当伤害
+    assert _damage_from({"enemies": {"e1": "gone"}}, {"e1": 36}) == 36
+    assert _damage_from({"enemies": {"e1": -5, "e2": "gone"}}, {"e2": 4}) == 9
+    # 敌人逃跑/消失但行动前血量未知 -> 不瞎记
+    assert _damage_from({"enemies": {"e9": "gone"}}, {"e1": 36}) == 0
     print("PASS damage from delta")
+
+
+def test_absorbed():
+    from run import _absorbed_from
+
+    assert _absorbed_from({"enemies_block": {"e1": -5}}) == 5
+    assert _absorbed_from({"enemies_block": {"e1": -5, "e2": -2}}) == 7
+    assert _absorbed_from({"enemies_block": {"e1": 3}}) == 0      # 对方加盾不算被吸收
+    assert _absorbed_from({}) == 0
+    print("PASS absorbed from delta")
+
+
+def test_ledger_absorbed():
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("Sword", 7, 0)
+        led.record_use("Sword", 0, 0, absorbed=7)
+        assert led.get("Sword")["samples"] == 2
+        assert led.get("Sword")["damage_sum"] == 7
+        assert led.get("Sword")["absorbed_sum"] == 7
+        print("PASS ledger absorbed")
 
 
 if __name__ == "__main__":
@@ -112,4 +138,6 @@ if __name__ == "__main__":
     test_policy_all_zero_ends_turn()
     test_no_legal()
     test_damage_from_delta()
+    test_absorbed()
+    test_ledger_absorbed()
     print("ALL PASS")

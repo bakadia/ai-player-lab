@@ -120,8 +120,11 @@ namespace BphBridge
                     bool targetable = B(delegate { return e.isTargetable; }, false);
                     bool pet = B(delegate { return e.isPet; }, false);
 
+                    int eid = I(delegate { return e.GetInstanceID(); }, 0);
                     w.BeginObject();
-                    w.Prop("uid", "e" + written);
+                    // uid 必须和 ack.delta 里的一致，否则 agent 无法把 delta 对回敌人。
+                    // delta 用的是 GetInstanceID()（跨帧稳定），这里也一样。
+                    w.Prop("uid", "e" + eid);
                     w.Prop("name", ename);
                     w.Prop("hp", ehp);
                     w.Prop("max_hp", emax);
@@ -463,6 +466,19 @@ namespace BphBridge
                 lines.Add("gf.battlePhase=" + I(delegate { return (int)gf.battlePhase; }, -1)
                     + " gf.turnNumber=" + I(delegate { return gf.turnNumber; }, -1)
                     + " gf.isUsingAnItem=" + B(delegate { return gf.isUsingAnItem; }, false));
+
+                // 诊断：GetCombatStat 一直返回 -1，把真实异常打出来（SPIKE-04 §4）
+                try
+                {
+                    int v = gf.GetCombatStat(
+                        (GameFlowManager.CombatStat.Type)6,
+                        (GameFlowManager.CombatStat.Length)0);
+                    lines.Add("GetCombatStat(damageDealt, turn)=" + v + " (call ok)");
+                }
+                catch (Exception ex)
+                {
+                    lines.Add("GetCombatStat THREW: " + ex.GetType().Name + ": " + ex.Message);
+                }
             }
             if (pl != null)
             {

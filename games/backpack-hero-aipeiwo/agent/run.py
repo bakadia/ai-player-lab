@@ -32,10 +32,26 @@ from policy import choose  # noqa: E402
 MAX_CONSECUTIVE_NOCHANGE = 3
 
 
-def _damage_from(delta: dict[str, Any]) -> int:
-    """ack.delta 里敌人的负值加总 = 这一下打出的伤害。"""
+def _damage_from(delta: dict[str, Any], pre_hp: dict[str, int] | None = None) -> int:
+    """ack.delta 里敌人的负值加总 = 这一下打出的伤害。
+
+    敌人被打死时 delta 里是字符串 "gone"，没有数值——这时要用**行动前的血量**
+    当成伤害。否则致命一击会被记成 0，把账本均值压低（SPIKE-04 实测踩到）。
+    """
     total = 0
-    for v in (delta.get("enemies") or {}).values():
+    for uid, v in (delta.get("enemies") or {}).items():
+        if isinstance(v, int):
+            if v < 0:
+                total += -v
+        elif v == "gone" and pre_hp:
+            total += pre_hp.get(uid, 0)
+    return total
+
+
+def _absorbed_from(delta: dict[str, Any]) -> int:
+    """被格挡掉的伤害：敌人护甲减少量（负数取反）。"""
+    total = 0
+    for v in (delta.get("enemies_block") or {}).values():
         if isinstance(v, int) and v < 0:
             total += -v
     return total
@@ -117,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
                 steps += 1
                 break
 
+            # 行动前的敌人血量：用来把 delta 里的 "gone" 换算成致命伤害
+            pre_hp = {e["uid"]: e.get("hp", 0) for e in enemies}
+
             # 用物品前先记住它的名字，ack 之后按 delta 记账
             item_name = None
             if action.get("type") == "use_item":
@@ -149,12 +168,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"     error={ack['error']}")
 
             if item_name:
-                dmg = _damage_from(delta)
+                dmg = _damage_from(delta, pre_hp)
+                absorbed = _absorbed_from(delta)
                 blk = max(0, int(delta.get("player_block", 0) or 0))
-                ledger.record_use(item_name, dmg, blk)
+                ledger.record_use(item_name, dmg, blk, absorbed)
                 ledger.save()
                 explored.add(item_name.strip())
-                print(f"     账本记录 {item_name!r}: dmg={dmg} block={blk}")
+                print(f"     账本记录 {item_name!r}: dmg={dmg} block={blk} absorbed={absorbed}")
 
             if not ack.get("changed"):
                 nochange_streak += 1
