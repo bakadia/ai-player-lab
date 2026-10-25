@@ -91,6 +91,8 @@ namespace BphBridge
 
             // ---- enemies ----
             int playerEnergy = I(delegate { return pl.AP; }, -1);
+            bool inPlayerTurn = battlePhase == 1;
+            List<LegalUse> legalUses = new List<LegalUse>();
             List<Enemy> allEnemies = null;
             try { allEnemies = Enemy.allEnemies; } catch { }
 
@@ -198,8 +200,10 @@ namespace BphBridge
                     string itext = "";
 
                     // SPIKE-02：item.cost 恒为 -999（哨兵），真实费用在 costs 集合里。
-                    // energy = 0（见 Item2+Cost+Type）。
+                    // Item2+Cost+Type: energy=0, mana=1, gold=2。
                     int energyCost = 0;
+                    int manaCost = 0;
+                    int goldCost = 0;
                     try
                     {
                         List<Item2.Cost> costs = it.costs;
@@ -209,7 +213,10 @@ namespace BphBridge
                             {
                                 Item2.Cost cost = costs[c];
                                 if (cost == null) continue;
-                                if ((int)cost.type == 0) energyCost += cost.currentValue;
+                                int t = (int)cost.type;
+                                if (t == 0) energyCost += cost.currentValue;
+                                else if (t == 1) manaCost += cost.currentValue;
+                                else if (t == 2) goldCost += cost.currentValue;
                             }
                         }
                     }
@@ -220,6 +227,28 @@ namespace BphBridge
                         if (ds != null && ds.Count > 0) itext = ds[0] == null ? "" : ds[0];
                     }
                     catch { }
+
+                    // ---- 合法性与原因 ----
+                    // v1 规则（全部待实战校准）：
+                    //   playType==Active(0) 才「能用」；循环/移动类不算动作
+                    //   充能类（max_charges != -999）没充能就不能用
+                    //   mana / gold 费用暂时无法算通路，先判为不可用并给出原因
+                    string reason = null;
+                    if (!inPlayerTurn) reason = "not_player_turn";
+                    else if (iplaytype != 0) reason = "not_active_item";
+                    else if (imaxcharges != -999 && icharges <= 0) reason = "no_charges";
+                    else if (energyCost > playerEnergy) reason = "no_energy";
+                    else if (manaCost > 0) reason = "needs_mana";
+                    else if (goldCost > 0) reason = "needs_gold";
+
+                    bool usable = reason == null;
+                    if (usable)
+                    {
+                        LegalUse lu = new LegalUse();
+                        lu.Uid = "i" + iuid;
+                        lu.Energy = energyCost;
+                        legalUses.Add(lu);
+                    }
 
                     List<string> cells = new List<string>();
                     try
@@ -241,7 +270,14 @@ namespace BphBridge
                     w.Prop("name", iname);
                     w.Prop("cost", icost);
                     w.Prop("energy_cost", energyCost);
-                    w.Prop("usable", energyCost <= playerEnergy);
+                    w.Name("costs").BeginObject();
+                    w.Prop("energy", energyCost);
+                    w.Prop("mana", manaCost);
+                    w.Prop("gold", goldCost);
+                    w.EndObject();
+                    w.Prop("usable", usable);
+                    if (reason == null) w.Name("reason").Null();
+                    else w.Prop("reason", reason);
                     w.Prop("charges", icharges);
                     w.Prop("max_charges", imaxcharges);
                     w.Prop("play_type", iplaytype);
@@ -257,6 +293,40 @@ namespace BphBridge
             w.EndArray();
             w.EndObject();
 
+            // ---- 战斗统计（游戏自己记的，白送的交叉校验） ----
+            // CombatStat+Type: itemsUsed=0, damageTaken=1, damageDealt=6
+            // CombatStat+Length: turn=0, combat=1
+            w.Name("stats").BeginObject();
+            w.Name("turn").BeginObject();
+            w.Prop("damage_dealt", CombatStat(gf, 6, 0));
+            w.Prop("damage_taken", CombatStat(gf, 1, 0));
+            w.Prop("items_used", CombatStat(gf, 0, 0));
+            w.EndObject();
+            w.Name("combat").BeginObject();
+            w.Prop("damage_dealt", CombatStat(gf, 6, 1));
+            w.Prop("damage_taken", CombatStat(gf, 1, 1));
+            w.Prop("items_used", CombatStat(gf, 0, 1));
+            w.EndObject();
+            w.EndObject();
+
+            // ---- 合法动作（Bridge 算，Agent 不猜） ----
+            w.Name("legal").BeginArray();
+            if (inPlayerTurn)
+            {
+                for (int i = 0; i < legalUses.Count; i++)
+                {
+                    w.BeginObject();
+                    w.Prop("type", "use_item");
+                    w.Prop("uid", legalUses[i].Uid);
+                    w.Prop("energy", legalUses[i].Energy);
+                    w.EndObject();
+                }
+                w.BeginObject();
+                w.Prop("type", "end_turn");
+                w.EndObject();
+            }
+            w.EndArray();
+
             // ---- counters ----
             int statuses = 0;
             try { if (Status.allStatuses != null) statuses = Status.allStatuses.Count; } catch { }
@@ -269,6 +339,26 @@ namespace BphBridge
 
             w.EndObject();
             return w.ToString();
+        }
+
+        /// <summary>一条合法动作（目前只有 use_item）。</summary>
+        private sealed class LegalUse
+        {
+            public string Uid;
+            public int Energy;
+        }
+
+        /// <summary>读游戏自带的战斗统计。CombatStat+Type / +Length 见注释。</summary>
+        private static int CombatStat(GameFlowManager gf, int type, int length)
+        {
+            try
+            {
+                if (gf == null) return -1;
+                return gf.GetCombatStat(
+                    (GameFlowManager.CombatStat.Type)type,
+                    (GameFlowManager.CombatStat.Length)length);
+            }
+            catch { return -1; }
         }
 
         private static bool IsPlaced(Item2 it)
