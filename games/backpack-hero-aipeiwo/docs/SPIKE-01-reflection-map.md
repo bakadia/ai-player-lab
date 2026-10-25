@@ -160,6 +160,9 @@ specificItemUsed=4, cursesReceived=5, damageDealt=6, invincibleHitsTaken=7`。
 
 ## 7. 还没答的问题（按优先级）
 
+> 2026-10-25 23:40 已在真实战斗上实测过一轮，Q1/Q5/Q6 有答案、Q4 换了字段，
+> 见 `SPIKE-02-live-state.md`。下表保留原始记录。
+
 1. **`Enemy.health` 和 `Enemy.stats.health` 哪个是活值？** —— 读错就是 A4 全面误报。
 2. **`Quick And Easy` 怎么表示？** `RunTypeManager.Instance.runType` + `RunType.runProperties`
    里 `RunType+RunProperty+Type` 是枚举，得看有哪些值。
