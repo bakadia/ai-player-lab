@@ -65,6 +65,15 @@ namespace BphBridge
         public JsonWriter Value(bool v) { Sep(); _sb.Append(Json.Bool(v)); _first = false; return this; }
         public JsonWriter Null() { Sep(); _sb.Append("null"); _first = false; return this; }
 
+        /// <summary>原样拼入一段已经合法的 JSON（不做转义）。</summary>
+        public JsonWriter Raw(string json)
+        {
+            Sep();
+            _sb.Append(json);
+            _first = false;
+            return this;
+        }
+
         public JsonWriter Prop(string name, string v) { return Name(name).Value(v); }
         public JsonWriter Prop(string name, int v) { return Name(name).Value(v); }
         public JsonWriter Prop(string name, long v) { return Name(name).Value(v); }

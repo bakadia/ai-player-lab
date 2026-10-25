@@ -85,11 +85,12 @@ namespace BphBridge
             w.Prop("block", pst == null ? -1 : I(delegate { return pst.armor; }, -1));
             w.Prop("energy", I(delegate { return pl.AP; }, -1));
             w.Prop("max_energy", I(delegate { return pl.APperTurn; }, -1));
-            // 探针：和 pst.health 对照，看哪个是「当前血量」的真源
-            w.Prop("gm_health_amount", I(delegate { return gm.currentHealthAmount; }, -1));
+            // 注：GameManager.currentHealthAmount 在 SPIKE-02 里被证伪——
+            // 玩家 HP 掉到 30 时它仍然是 40，不是活值。只在 Probe 里留作对照。
             w.EndObject();
 
             // ---- enemies ----
+            int playerEnergy = I(delegate { return pl.AP; }, -1);
             List<Enemy> allEnemies = null;
             try { allEnemies = Enemy.allEnemies; } catch { }
 
@@ -189,11 +190,30 @@ namespace BphBridge
                     if (!IsPlaced(it)) continue;
 
                     string iname = S(delegate { return it.displayName; });
+                    int iuid = I(delegate { return it.GetInstanceID(); }, 0);
                     int icost = I(delegate { return it.cost; }, -1);
                     int icharges = I(delegate { return it.currentCharges; }, -1);
                     int imaxcharges = I(delegate { return it.charges; }, -1);
                     int iplaytype = I(delegate { return (int)it.playType; }, -1);
                     string itext = "";
+
+                    // SPIKE-02：item.cost 恒为 -999（哨兵），真实费用在 costs 集合里。
+                    // energy = 0（见 Item2+Cost+Type）。
+                    int energyCost = 0;
+                    try
+                    {
+                        List<Item2.Cost> costs = it.costs;
+                        if (costs != null)
+                        {
+                            for (int c = 0; c < costs.Count; c++)
+                            {
+                                Item2.Cost cost = costs[c];
+                                if (cost == null) continue;
+                                if ((int)cost.type == 0) energyCost += cost.currentValue;
+                            }
+                        }
+                    }
+                    catch { }
                     try
                     {
                         List<string> ds = it.descriptions;
@@ -217,8 +237,11 @@ namespace BphBridge
                     catch { }
 
                     w.BeginObject();
+                    w.Prop("uid", "i" + iuid);
                     w.Prop("name", iname);
                     w.Prop("cost", icost);
+                    w.Prop("energy_cost", energyCost);
+                    w.Prop("usable", energyCost <= playerEnergy);
                     w.Prop("charges", icharges);
                     w.Prop("max_charges", imaxcharges);
                     w.Prop("play_type", iplaytype);
@@ -322,6 +345,38 @@ namespace BphBridge
                         + " maxHealthBeforeItems=" + I(delegate { return st.maxHealthBeforeItems; }, -1));
                 }
             }
+
+            // Quick And Easy 到底怎么表示（SPIKE-01 §7 Q2）
+            try
+            {
+                RunTypeManager rtm = RunTypeManager.Instance;
+                if (rtm == null) lines.Add("RunTypeManager.Instance=null");
+                else
+                {
+                    RunType rt = null;
+                    try { rt = rtm.runType; } catch { }
+                    if (rt == null) lines.Add("RunTypeManager.runType=null");
+                    else
+                    {
+                        List<RunType.RunProperty> props = null;
+                        try { props = rt.runProperties; } catch { }
+                        lines.Add("runType.hardMode=" + B(delegate { return rt.hardMode; }, false)
+                            + " key='" + S(delegate { return rt.runTypeLanguageKey; }) + "'"
+                            + " props=" + (props == null ? "null" : props.Count.ToString()));
+                        if (props != null)
+                        {
+                            for (int i = 0; i < props.Count; i++)
+                            {
+                                RunType.RunProperty rp = props[i];
+                                if (rp == null) continue;
+                                lines.Add("  runProp[" + i + "] type=" + I(delegate { return (int)rp.type; }, -1)
+                                    + " value=" + I(delegate { return rp.value; }, -1));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { lines.Add("runType probe failed: " + ex.Message); }
 
             // 敌人：Enemy.health 和 Enemy.stats.health 到底哪个是活值
             List<Enemy> es = null;

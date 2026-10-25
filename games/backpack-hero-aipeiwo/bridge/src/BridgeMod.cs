@@ -9,14 +9,14 @@ using UnityEngine;
 // 开发者在 MelonLoader 日志里是 "Game Developer: TheJaspel"，不是 "Jaspel"——
 // 写成 Jaspel 会被判定为 "is incompatible: ... only compatible with 'Backpack Hero' by Jaspel"
 // 然后静默变成 "0 Mods loaded"。详见 docs/PITFALLS.md E1。
-[assembly: MelonInfo(typeof(BphBridge.BridgeMod), "BphBridge", "0.1.0", "ai-player-lab")]
+[assembly: MelonInfo(typeof(BphBridge.BridgeMod), "BphBridge", "0.2.0", "ai-player-lab")]
 [assembly: MelonGame("TheJaspel", "Backpack Hero")]
 
 namespace BphBridge
 {
     /// <summary>
-    /// 游戏内执行器。只做三件事：读状态、算合法动作、执行动作。
-    /// 现在只实现了第一件（写 runtime/state.json），动作层留给下一步。
+    /// 游戏内执行器。三件事：读状态、算合法动作、执行动作。
+    /// 现在做了 1 和 3；「算合法动作」还只是把能量费用算出来，没有完整 legal 列表。
     /// </summary>
     public class BridgeMod : MelonMod
     {
@@ -29,7 +29,10 @@ namespace BphBridge
         private long _errors;
         private float _nextErrorLog;
 
-        // 探针分两段：开局后一次（看背包），进战斗后一次（看敌人）
+        private PendingCommand _pending;
+        private long _pendingSeqBefore;
+
+        // 探针分段：开局后一次（背包+运行类型），玩家回合一次（敌人意图）
         private int _probeStage;
 
         public override void OnInitializeMelon()
@@ -37,6 +40,7 @@ namespace BphBridge
             RuntimePaths.Init(typeof(BridgeMod).Assembly.Location);
             LoggerInstance.Msg("BphBridge loaded. game=" + Application.productName);
             LoggerInstance.Msg("[BphBridge] runtime = " + RuntimePaths.Dir);
+            LoggerInstance.Msg("[BphBridge] poll=" + PollInterval + "s settle=" + Actions.SettleSeconds + "s");
         }
 
         public override void OnUpdate()
@@ -48,24 +52,8 @@ namespace BphBridge
             try
             {
                 TryProbe(now);
-
-                // 内容不变就不重写：seq 只在状态真的变了才 +1。
-                // 传 0,0 只是为了拿到「不含 seq/ts」的可比较正文。
-                string body = StateReader.Build(0, 0);
-                if (body == _lastBody) return;
-
-                _seq++;
-                _lastBody = body;
-
-                string doc = StateReader.Build(_seq, NowMs());
-                WriteAtomic(RuntimePaths.StateFile, doc);
-
-                _writes++;
-                if (_writes <= 5 || _writes % 200 == 0)
-                {
-                    LoggerInstance.Msg("[BphBridge] state #" + _writes
-                        + " seq=" + _seq + " bytes=" + doc.Length);
-                }
+                TickActions(now);
+                TickState(now);
             }
             catch (Exception ex)
             {
@@ -83,6 +71,127 @@ namespace BphBridge
             LoggerInstance.Msg("[BphBridge] quit. writes=" + _writes + " seq=" + _seq + " errors=" + _errors);
         }
 
+        // ---------- 状态 ----------
+
+        private void TickState(float now)
+        {
+            // 内容不变就不重写：seq 只在状态真的变了才 +1。
+            // 传 0,0 只是为了拿到「不含 seq/ts」的可比较正文。
+            string body = StateReader.Build(0, 0);
+            if (body == _lastBody) return;
+
+            _seq++;
+            _lastBody = body;
+
+            string doc = StateReader.Build(_seq, NowMs());
+            WriteAtomic(RuntimePaths.StateFile, doc);
+
+            _writes++;
+            if (_writes <= 5 || _writes % 200 == 0)
+            {
+                LoggerInstance.Msg("[BphBridge] state #" + _writes + " seq=" + _seq + " bytes=" + doc.Length);
+            }
+        }
+
+        // ---------- 动作 ----------
+
+        private void TickActions(float now)
+        {
+            bool halted = false;
+            try { halted = File.Exists(RuntimePaths.HaltFile); } catch { }
+
+            if (halted)
+            {
+                if (_pending != null) FinishPending("halted", now);
+                RejectQueued("halted");
+                return;
+            }
+
+            if (_pending == null)
+            {
+                PendingCommand pc = null;
+                try { pc = Actions.TakeNext(); }
+                catch (Exception ex) { LoggerInstance.Warning("[BphBridge] queue error: " + ex.Message); }
+                if (pc == null) return;
+
+                _pending = pc;
+                _pendingSeqBefore = _seq;
+                pc.Before = Snapshot.Take();
+                pc.BeforeBody = StateReader.Build(0, 0);
+                pc.LastBody = pc.BeforeBody;
+                pc.StartTime = now;
+                pc.LastChangeTime = now;
+
+                try
+                {
+                    Actions.Execute(pc);
+                }
+                catch (Exception ex)
+                {
+                    pc.Error = ex.GetType().Name + ": " + ex.Message;
+                }
+                pc.Executed = true;
+                return;
+            }
+
+            // 已经在执行：等状态稳定
+            string body = StateReader.Build(0, 0);
+            if (body != _pending.LastBody)
+            {
+                _pending.LastBody = body;
+                _pending.LastChangeTime = now;
+            }
+
+            float elapsedMs = (now - _pending.StartTime) * 1000f;
+            bool settled = (now - _pending.LastChangeTime) >= Actions.SettleSeconds;
+            bool timedOut = elapsedMs >= _pending.TimeoutMs;
+
+            if (timedOut && !settled)
+            {
+                if (_pending.Error == null) _pending.Error = "timeout after " + (int)elapsedMs + "ms";
+                FinishPending(null, now);
+            }
+            else if (settled)
+            {
+                FinishPending(null, now);
+            }
+        }
+
+        private void FinishPending(string error, float now)
+        {
+            PendingCommand pc = _pending;
+            _pending = null;
+            if (pc == null) return;
+            if (error != null) pc.Error = error;
+
+            Snapshot after = Snapshot.Take();
+            string diff = pc.Before != null && after != null ? pc.Before.DiffJson(after) : "{}";
+            bool changed = diff != "{}";
+            int ms = (int)((now - pc.StartTime) * 1000f);
+
+            Actions.WriteAck(pc, _pendingSeqBefore, _seq, after, changed, ms);
+
+            LoggerInstance.Msg("[BphBridge] ack id=" + pc.Id
+                + " ok=" + (pc.Error == null && changed)
+                + " changed=" + changed
+                + " ms=" + ms
+                + " delta=" + diff
+                + (pc.Error == null ? "" : " err=" + pc.Error));
+        }
+
+        private void RejectQueued(string reason)
+        {
+            for (int guard = 0; guard < 32; guard++)
+            {
+                PendingCommand pc = null;
+                try { pc = Actions.TakeNext(); }
+                catch { }
+                if (pc == null) return;
+                pc.Error = reason;
+                Actions.WriteAck(pc, _seq, _seq, Snapshot.Take(), false, 0);
+            }
+        }
+
         // ---------- 探针 ----------
 
         private void TryProbe(float now)
@@ -91,38 +200,48 @@ namespace BphBridge
 
             GameManager gm = null;
             Player pl = null;
+            GameFlowManager gf = null;
             try { gm = GameManager.main; } catch { }
             try { pl = Player.main; } catch { }
+            try { gf = GameFlowManager.main; } catch { }
             if (gm == null || pl == null) return;
 
             int floor = -1;
             try { floor = gm.floor; } catch { }
             if (floor < 1) return;                       // 还没开局
 
-            int alive = 0;
-            try
-            {
-                List<Enemy> es = Enemy.allEnemies;
-                if (es != null)
-                {
-                    for (int i = 0; i < es.Count; i++)
-                    {
-                        Enemy e = es[i];
-                        if (e != null && !e.dead) alive++;
-                    }
-                }
-            }
-            catch { }
-
             if (_probeStage == 0)
             {
                 LoggerInstance.Msg("[BphBridge] ===== probe #1 (run started, floor=" + floor + ") =====");
                 DumpProbe();
                 _probeStage = 1;
+                return;
             }
-            else if (_probeStage == 1 && alive > 0)
+
+            // 意图要在玩家回合取：enemyTurn 时 myNextAttack 已经清空（SPIKE-02 §3.1）
+            if (_probeStage == 1)
             {
-                LoggerInstance.Msg("[BphBridge] ===== probe #2 (combat, alive=" + alive + ") =====");
+                int phase = -1;
+                try { if (gf != null) phase = (int)gf.battlePhase; } catch { }
+                if (phase != 1) return;
+
+                int alive = 0;
+                try
+                {
+                    List<Enemy> es = Enemy.allEnemies;
+                    if (es != null)
+                    {
+                        for (int i = 0; i < es.Count; i++)
+                        {
+                            Enemy e = es[i];
+                            if (e != null && !e.dead) alive++;
+                        }
+                    }
+                }
+                catch { }
+                if (alive <= 0) return;
+
+                LoggerInstance.Msg("[BphBridge] ===== probe #2 (playerTurn, alive=" + alive + ") =====");
                 DumpProbe();
                 _probeStage = 2;
             }

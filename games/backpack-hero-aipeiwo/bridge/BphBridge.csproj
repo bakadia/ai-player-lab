@@ -47,8 +47,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="src\Actions.cs" />
     <Compile Include="src\BridgeMod.cs" />
     <Compile Include="src\Json.cs" />
+    <Compile Include="src\MiniJson.cs" />
     <Compile Include="src\RuntimePaths.cs" />
     <Compile Include="src\StateReader.cs" />
   </ItemGroup>

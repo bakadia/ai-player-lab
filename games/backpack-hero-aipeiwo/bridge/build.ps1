@@ -59,10 +59,12 @@ $refs = @(
     (Join-Path $managed 'Assembly-CSharp.dll')
 )
 
-# /noconfig is required: csc otherwise reads csc.rsp from its own directory and
-# auto-references the system System.dll / System.Core.dll, which collides with the
-# game BCL as CS1703 duplicate assembly identity.
-$cscArgs = @('/nologo', '/noconfig', '/target:library', '/platform:anycpu', '/optimize+', '/langversion:5', '/nostdlib+', "/out:$out")
+# /noconfig : csc would otherwise read csc.rsp and auto-reference the system
+#             System.dll / System.Core.dll -> CS1703 duplicate assembly identity.
+# /nostdlib+ : do not implicitly reference the system mscorlib.
+# /codepage  : read sources as UTF-8; without it csc uses the local ANSI code page
+#             and non-ASCII (Chinese) comments get mangled.
+$cscArgs = @('/nologo', '/noconfig', '/target:library', '/platform:anycpu', '/optimize+', '/langversion:5', '/nostdlib+', '/codepage:65001', "/out:$out")
 foreach ($r in $refs) {
     if (-not (Test-Path $r)) { throw "reference not found: $r" }
     $cscArgs += "/r:$r"
