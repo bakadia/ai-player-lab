@@ -81,7 +81,30 @@ namespace BphBridge
             return s;
         }
 
-        /// <summary>算出 after 相对 this 的变化。没有变化就是空对象。</summary>
+        /// <summary>
+        /// 到底有没有变。**判断必须走这里，不能靠 DiffJson() != "{}"**——
+        /// 早先版本 DiffJson 无条件写 "enemies":{}，导致每个动作都被判成有变化。
+        /// </summary>
+        public bool Differs(Snapshot a)
+        {
+            if (a == null) return true;
+            if (a.PlayerHp != PlayerHp) return true;
+            if (a.PlayerEnergy != PlayerEnergy) return true;
+            if (a.PlayerBlock != PlayerBlock) return true;
+            if (a.BattlePhase != BattlePhase) return true;
+            if (a.TurnNumber != TurnNumber) return true;
+            if (a.Floor != Floor) return true;
+            if (a.EnemyHp.Count != EnemyHp.Count) return true;
+            foreach (KeyValuePair<int, int> kv in EnemyHp)
+            {
+                int now;
+                if (!a.EnemyHp.TryGetValue(kv.Key, out now)) return true;
+                if (now != kv.Value) return true;
+            }
+            return false;
+        }
+
+        /// <summary>算出 after 相对 this 的变化。没有变化就是空对象 {}。</summary>
         public string DiffJson(Snapshot after)
         {
             JsonWriter w = new JsonWriter();
@@ -104,22 +127,44 @@ namespace BphBridge
                 w.Name("floor").BeginArray().Value(Floor).Value(after.Floor).EndArray();
             }
 
-            w.Name("enemies").BeginObject();
+            // 先收集，非空才写，避免永远吐一个 "enemies":{}
+            List<string> keys = new List<string>();
+            List<object> vals = new List<object>();
             foreach (KeyValuePair<int, int> kv in EnemyHp)
             {
                 int now;
                 if (!after.EnemyHp.TryGetValue(kv.Key, out now))
                 {
-                    w.Name("e" + kv.Key).Value("gone");
+                    keys.Add("e" + kv.Key);
+                    vals.Add("gone");
                     continue;
                 }
-                if (now != kv.Value) w.Prop("e" + kv.Key, now - kv.Value);
+                if (now != kv.Value)
+                {
+                    keys.Add("e" + kv.Key);
+                    vals.Add(now - kv.Value);
+                }
             }
             foreach (KeyValuePair<int, int> kv in after.EnemyHp)
             {
-                if (!EnemyHp.ContainsKey(kv.Key)) w.Prop("e" + kv.Key, "appeared");
+                if (!EnemyHp.ContainsKey(kv.Key))
+                {
+                    keys.Add("e" + kv.Key);
+                    vals.Add("appeared");
+                }
             }
-            w.EndObject();
+
+            if (keys.Count > 0)
+            {
+                w.Name("enemies").BeginObject();
+                for (int i = 0; i < keys.Count; i++)
+                {
+                    w.Name(keys[i]);
+                    if (vals[i] is int) w.Value((int)vals[i]);
+                    else w.Value((string)vals[i]);
+                }
+                w.EndObject();
+            }
 
             w.EndObject();
             return w.ToString();
@@ -143,11 +188,30 @@ namespace BphBridge
         public bool Executed;
         public string Error;
         public string AckPath;
+
+        /// <summary>
+        /// 结束回合要等敌人打完整轮：光靠「状态 N 毫秒没变」会在动画间隙误判，
+        /// 所以额外要求 battlePhase 回到 playerTurn(1) 或 outOfBattle(0)。
+        /// </summary>
+        public bool WaitPlayerTurn;
     }
 
     internal static class Actions
     {
-        public const float SettleSeconds = 0.3f;
+        public const float SettleSeconds = 0.4f;
+
+        /// <summary>当前是否处在「等玩家操作」或「不在战斗」的稳定阶段。</summary>
+        public static bool PhaseIsPlayerOrIdle()
+        {
+            try
+            {
+                GameFlowManager gf = GameFlowManager.main;
+                if (gf == null) return true;
+                int p = (int)gf.battlePhase;
+                return p == 0 || p == 1;
+            }
+            catch { return true; }
+        }
 
         // ---------- 队列 ----------
 

@@ -121,6 +121,7 @@ namespace BphBridge
                 pc.LastBody = pc.BeforeBody;
                 pc.StartTime = now;
                 pc.LastChangeTime = now;
+                pc.WaitPlayerTurn = MiniJson.Str(pc.Action, "type", "") == "end_turn";
 
                 try
                 {
@@ -145,14 +146,21 @@ namespace BphBridge
             float elapsedMs = (now - _pending.StartTime) * 1000f;
             bool settled = (now - _pending.LastChangeTime) >= Actions.SettleSeconds;
             bool timedOut = elapsedMs >= _pending.TimeoutMs;
+            bool phaseReady = !_pending.WaitPlayerTurn || Actions.PhaseIsPlayerOrIdle();
 
-            if (timedOut && !settled)
+            if (settled && phaseReady)
             {
-                if (_pending.Error == null) _pending.Error = "timeout after " + (int)elapsedMs + "ms";
                 FinishPending(null, now);
+                return;
             }
-            else if (settled)
+
+            if (timedOut)
             {
+                if (_pending.Error == null)
+                {
+                    _pending.Error = "timeout after " + (int)elapsedMs + "ms"
+                        + (phaseReady ? "" : " (battlePhase never came back to player/idle)");
+                }
                 FinishPending(null, now);
             }
         }
@@ -165,8 +173,10 @@ namespace BphBridge
             if (error != null) pc.Error = error;
 
             Snapshot after = Snapshot.Take();
-            string diff = pc.Before != null && after != null ? pc.Before.DiffJson(after) : "{}";
-            bool changed = diff != "{}";
+            bool hasSnapshots = pc.Before != null && after != null;
+            string diff = hasSnapshots ? pc.Before.DiffJson(after) : "{}";
+            // 注意：用 Differs 判断，不要用 diff != "{}"
+            bool changed = hasSnapshots && pc.Before.Differs(after);
             int ms = (int)((now - pc.StartTime) * 1000f);
 
             Actions.WriteAck(pc, _pendingSeqBefore, _seq, after, changed, ms);
