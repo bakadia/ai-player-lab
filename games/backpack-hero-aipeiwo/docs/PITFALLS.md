@@ -71,3 +71,51 @@ The requested operation cannot be performed on a file with a user-mapped section
 - 写 bridge 代码时禁用：字符串插值 `$""`、`?.`、表达式体成员 `=>`、`nameof`、
   元组、`out var`。
 - 想用新语法就装 .NET SDK 或 VS 的 C# 工作负载——不是当前阻塞项，先不装。
+
+## E4 · 「有没有变化」用 diff 字符串判空，恒为真
+
+**怎么发现的**：动作层第一次跑通，发了个 `noop`（什么都不做），回执是
+`{"ok":true,"changed":true,"delta":{"enemies":{}}}`。
+
+**为什么**：`changed` 写成了 `DiffJson() != "{}"`，而 `DiffJson()` 无论有没有变化
+都会写出 `"enemies":{}` 这个键，所以判断永远为真。
+
+**为什么这很致命**：验收项 A4 要求「每个动作都有 expected/actual delta，
+静默失败漏检 = 0」。`changed` 恒真意味着**任何动作都被判成功**——
+正是这套东西最想防的那类失败。
+
+**以后怎么办**：
+
+- 「有没有变」必须用结构化比对（`Snapshot.Differs()` 逐字段），**不许**拿序列化结果判空。
+- 生成 delta 时，**先收集、非空才写键**，别写空容器占位。
+- 每个动作都要留一个 `noop` 回归用例：`noop` 必须回 `changed=false, delta={}`。
+
+## E5 · PowerShell 里 `\"` 不是转义，字符串会提前结束
+
+**怎么发现的**：`git commit -m "... \"enemies\":{} ..."` 报
+`fatal: options '-m' and '-c' cannot be used together`——明明只传了 `-m`。
+
+**为什么**：PowerShell 用反引号 `` ` `` 转义，`\"` 实际是「反斜杠 + 字符串结束符」。
+字符串在那里就断了，后面的内容变成独立参数，其中某些被 git 当成了选项。
+
+**以后怎么办**：
+
+- 多行/含引号的提交信息用 here-string：`$msg = @' ... '@` 再 `git commit -m $msg`。
+- 或者把信息写进文件，用 `git commit -F <file>`。
+- 同类问题：`.ps1` 里别写非 ASCII 注释（见 E6）。
+
+## E6 · 无 BOM 的 UTF-8 PowerShell 脚本被按 GBK 解码
+
+**怎么发现的**：往 `bridge/build.ps1` 里加了几行中文注释后，构建突然报
+`fatal error CS2007: 无法识别的选项 "/"`——一个和注释毫无关系的错误。
+更早一次同样现象，报的是 `Unexpected token ')'`。
+
+**为什么**：Windows PowerShell 5.1 读没有 BOM 的 `.ps1` 时会用本地 ANSI 代码页（中文系统是 GBK）。
+UTF-8 的中文字节被当成 GBK 解码后，可能吞掉后面的换行符或引号，
+于是**下一行代码被并进注释**——`$cscArgs = @(...)` 整行消失，变量根本没赋值。
+
+**以后怎么办**：
+
+- 构建/测试脚本一律 **纯 ASCII**（`bridge/build.ps1`、`tests/run-tests.ps1` 都是）。
+- 写完脚本可以验一下：`(Get-Content -Encoding Byte x.ps1 | Where-Object {$_ -gt 127}).Count` 应为 0。
+- 中文说明写在 `.md` 和 `.cs` 里；`.cs` 靠 csc 的 `/codepage:65001` 保证按 UTF-8 读。
