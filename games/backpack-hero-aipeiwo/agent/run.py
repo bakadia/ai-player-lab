@@ -98,6 +98,13 @@ def main(argv: list[str] | None = None) -> int:
                 steps += 1
                 continue
 
+            # legal 只在玩家回合填充；轮询到 enemyTurn 时是空的，要等而不是退出
+            if not st.get("legal"):
+                print("  还没轮到玩家（legal 为空），等")
+                time.sleep(0.2)
+                steps += 1
+                continue
+
             action, why = choose(st, ledger, explored)
             if action is None:
                 print(f"没有可做的动作：{why}")

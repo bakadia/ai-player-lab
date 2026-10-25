@@ -229,19 +229,30 @@ namespace BphBridge
                     catch { }
 
                     // ---- 合法性与原因 ----
-                    // v1 规则（全部待实战校准）：
-                    //   playType==Active(0) 才「能用」；循环/移动类不算动作
-                    //   充能类（max_charges != -999）没充能就不能用
-                    //   mana / gold 费用暂时无法算通路，先判为不可用并给出原因
-                    string reason = null;
-                    if (!inPlayerTurn) reason = "not_player_turn";
-                    else if (iplaytype != 0) reason = "not_active_item";
-                    else if (imaxcharges != -999 && icharges <= 0) reason = "no_charges";
-                    else if (energyCost > playerEnergy) reason = "no_energy";
-                    else if (manaCost > 0) reason = "needs_mana";
-                    else if (goldCost > 0) reason = "needs_gold";
+                    // 主判据用游戏自己的 Item2.CanBeUsedActive()，不再靠手写启发式。
+                    // 起因：合金(ALLOY) 是遗物（被动），playType 却是 Active(0)、
+                    // energy_cost=0，被旧规则误判成「可用动作」，用了什么都不发生。
+                    bool isRelic = IsRelic(it);
+                    int canActive = -1;
+                    if (inPlayerTurn) canActive = TryCanUseActive(it);
 
-                    bool usable = reason == null;
+                    string reason = null;
+                    bool usable = false;
+                    if (!inPlayerTurn) reason = "not_player_turn";
+                    else if (isRelic) reason = "relic_passive";
+                    else if (canActive == 0) reason = "game_says_no";
+                    else if (canActive == 1) usable = true;     // 游戏说行就信它
+                    else
+                    {
+                        // CanBeUsedActive 调用失败，退回启发式
+                        if (iplaytype != 0) reason = "not_active_item";
+                        else if (imaxcharges != -999 && icharges <= 0) reason = "no_charges";
+                        else if (energyCost > playerEnergy) reason = "no_energy";
+                        else if (manaCost > 0) reason = "needs_mana";
+                        else if (goldCost > 0) reason = "needs_gold";
+                        usable = reason == null;
+                    }
+
                     if (usable)
                     {
                         LegalUse lu = new LegalUse();
@@ -276,6 +287,8 @@ namespace BphBridge
                     w.Prop("gold", goldCost);
                     w.EndObject();
                     w.Prop("usable", usable);
+                    w.Prop("is_relic", isRelic);
+                    w.Prop("can_be_used_active", canActive);   // -1=调用失败 0=否 1=是
                     if (reason == null) w.Name("reason").Null();
                     else w.Prop("reason", reason);
                     w.Prop("charges", icharges);
@@ -339,6 +352,39 @@ namespace BphBridge
 
             w.EndObject();
             return w.ToString();
+        }
+
+        /// <summary>Item2+ItemType.Relic = 22。遗物是被动效果，不该当动作发。</summary>
+        private static bool IsRelic(Item2 it)
+        {
+            try
+            {
+                List<Item2.ItemType> types = it.itemType;
+                if (types == null) return false;
+                for (int i = 0; i < types.Count; i++)
+                {
+                    if ((int)types[i] == 22) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>
+        /// 问游戏自己：这件物品现在能不能主动用。
+        /// 返回 1=能 0=不能 -1=调用失败（调用方退回启发式）。
+        /// </summary>
+        private static int TryCanUseActive(Item2 it)
+        {
+            try
+            {
+                List<Item2.Cost> costs = new List<Item2.Cost>();
+                List<SpecificConditionToUse.ConditionTime> times =
+                    new List<SpecificConditionToUse.ConditionTime>();
+                bool ok = it.CanBeUsedActive(false, costs, true, false, times, true);
+                return ok ? 1 : 0;
+            }
+            catch { return -1; }
         }
 
         /// <summary>一条合法动作（目前只有 use_item）。</summary>
