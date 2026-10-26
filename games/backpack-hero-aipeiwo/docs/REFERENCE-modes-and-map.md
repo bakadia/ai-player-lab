@@ -117,3 +117,38 @@ Easy Mode 没有这一条 —— 这也是「`rt4` 不是 Quick and Easy」的�
 2. **正式跑一局 Quick and Easy**：挑战列表要滚动，选带 `oneFloorBeforeBoss` 的那个，
    跑完确认 `runProperties` 里出现 `type=26`。
 3. 从那以后 baseline 换成 Quick and Easy；Easy Mode 的账本数据仍可复用（物品效果与挑战无关）。
+
+---
+
+## 6. 官方 Mod 文档（ModDocs）覆盖什么
+
+仓库：[BackpackHero/ModDocs](https://github.com/BackpackHero/ModDocs)（mkdocs 站点）
+
+**范围：只讲「物品 JSON 内容包」怎么做，不讲游戏结构。**
+
+| 目录 | 内容 |
+|---|---|
+| `docs/How_to_Create_Mods/` | 装 mod、写 modpack、物品入门、发布 |
+| `docs/JSON_Reference/Items/` | 物品字段参考 |
+| `schemas/*.schema.json` | 物品/效果/费用的 JSON Schema |
+| `schemas/Enum/` | 20 个枚举，**全部是物品/效果相关**（AnimationType、Area、EffectType、ItemType、Rarity、TriggerType、UseSituation…） |
+
+### 有的（对我们有用）
+
+1. **`Costs` schema 官方确认了费用模型** —— 就是 `energy` / `mana` / `gold` 三个整数
+   （或 `ValueChanger`）。这正是 SPIKE-02 里从 `-999` 哨兵反推出来的那个结论，
+   现在有官方文档背书，不再是猜测。
+2. **`ItemType` 枚举**（含 `Relic`）与 dnmap 导出的值一致，互为印证。
+3. **效果体系**（`Effect` / `Trigger` / `Modifier` / `ValueChanger`）——
+   将来若要把「实验观测的账本」升级成「按效果类型聚合」，这是现成的分类依据。
+
+### 没有的（别指望）
+
+- **地图 / 节点 / 遭遇 / RunType：完全没有。** 下一步探测 `EventButton` 还得自己做。
+- `UseSituation` 看着像「能不能用」，但官方描述是
+  *"Used with onAlternateUse to determine when an item can be used using the context menu"*
+  —— 只作用于右键菜单的备选使用，**不是主动使用的判据**。
+  所以它解决不了「遗物被误判成可用动作」的问题，那条仍按实测结论（`is_relic` + `CanBeUsedActive`）处理。
+
+> 结论：这个仓库不改变下一步（地图），但把物品这块从「猜」升级成「有官方文档背书」。
+
