@@ -124,6 +124,37 @@ namespace BphBridge
                 string atype = MiniJson.Str(pc.Action, "type", "");
                 pc.WaitPlayerTurn = atype == "end_turn";
                 pc.WaitReorg = atype == "finish_reorganize" || atype == "skip_reorganize";
+                if (atype == "move_to_room") pc.WaitRoom = MiniJson.Str(pc.Action, "room", "");
+                if (atype == "open_map") pc.WaitViewingTop = 1;
+                pc.WaitNoPopup = atype == "close_popup";
+                pc.WaitWorldChange = atype == "enter_door" || atype == "finish_event";
+                if (atype == "enter_door" && pc.TimeoutMs < 15000) pc.TimeoutMs = 15000;
+
+                pc.WaitItemsInGrid = atype == "place_item";
+                if (pc.WaitItemsInGrid)
+                {
+                    pc.ItemsInGridBefore = pc.Before == null ? -1 : pc.Before.ItemsInGrid;
+                    if (pc.TimeoutMs < 10000) pc.TimeoutMs = 10000;
+                }
+
+                pc.WaitLooseAbove = atype == "open_chest";
+                if (pc.WaitLooseAbove)
+                {
+                    pc.LooseBefore = pc.Before == null ? -1 : pc.Before.ItemsLoose;
+                    if (pc.TimeoutMs < 10000) pc.TimeoutMs = 10000;
+                }
+
+                pc.WaitNoLeveling = atype == "finish_level_up";
+
+                // 只有「去冒险吧」会真的进局；点「快速开始」只是弹角色选择，
+                // 用 30 秒的门去等它会让每一步都白等。
+                string srVia = atype == "start_run" ? MiniJson.Str(pc.Action, "via", "") : "";
+                pc.WaitDungeon = atype == "start_run" &&
+                                 (srVia == "confirm" || srVia == "button" || srVia == "adventure");
+                if (pc.WaitDungeon && pc.TimeoutMs < 15000) pc.TimeoutMs = 15000;
+
+                // 出门/换层要先记住「之前的世界长什么样」，等它变了才算完成
+                if (pc.WaitWorldChange) pc.WorldSig = World.Signature();
 
                 try
                 {
@@ -150,6 +181,19 @@ namespace BphBridge
             bool timedOut = elapsedMs >= _pending.TimeoutMs;
             bool phaseReady = !_pending.WaitPlayerTurn || Actions.PhaseIsPlayerOrIdle();
             if (_pending.WaitReorg) phaseReady = phaseReady && Actions.ReorganizeFinished();
+            if (_pending.WaitRoom != null && _pending.WaitRoom.Length > 0)
+                phaseReady = phaseReady && Actions.RoomArrived(_pending.WaitRoom);
+            if (_pending.WaitViewingTop >= 0)
+                phaseReady = phaseReady && Actions.ViewingTopIs(_pending.WaitViewingTop);
+            if (_pending.WaitNoPopup) phaseReady = phaseReady && Actions.NoPopups();
+            if (_pending.WaitWorldChange) phaseReady = phaseReady && Actions.WorldChanged(_pending.WorldSig) && Actions.WorldReady();
+            if (_pending.WaitItemsInGrid) phaseReady = phaseReady && Actions.ItemsInGridAbove(_pending.ItemsInGridBefore);
+            if (_pending.WaitLooseAbove)
+                phaseReady = phaseReady && Actions.LooseItemsOrCombat(
+                    _pending.LooseBefore,
+                    _pending.Before == null ? -1 : _pending.Before.BattlePhase);
+            if (_pending.WaitNoLeveling) phaseReady = phaseReady && Actions.LevelingDone();
+            if (_pending.WaitDungeon) phaseReady = phaseReady && Actions.DungeonReady();
 
             if (settled && phaseReady)
             {
@@ -161,8 +205,7 @@ namespace BphBridge
             {
                 if (_pending.Error == null)
                 {
-                    _pending.Error = "timeout after " + (int)elapsedMs + "ms"
-                        + (phaseReady ? "" : " (battlePhase never came back to player/idle)");
+                    _pending.Error = "timeout after " + (int)elapsedMs + "ms" + GateHint(_pending);
                 }
                 FinishPending(null, now);
             }
@@ -190,6 +233,28 @@ namespace BphBridge
                 + " ms=" + ms
                 + " delta=" + diff
                 + (pc.Error == null ? "" : " err=" + pc.Error));
+        }
+
+        /// <summary>超时的时候告诉人「到底卡在哪道门」，别只说 battlePhase。</summary>
+        private static string GateHint(PendingCommand pc)
+        {
+            List<string> parts = new List<string>();
+            if (pc.WaitPlayerTurn && !Actions.PhaseIsPlayerOrIdle()) parts.Add("battlePhase not player/idle");
+            if (pc.WaitReorg && !Actions.ReorganizeFinished()) parts.Add("inventoryPhase still reorganize");
+            if (pc.WaitRoom != null && pc.WaitRoom.Length > 0 && !Actions.RoomArrived(pc.WaitRoom))
+                parts.Add("not arrived at " + pc.WaitRoom);
+            if (pc.WaitViewingTop >= 0 && !Actions.ViewingTopIs(pc.WaitViewingTop))
+                parts.Add("viewingTop != " + pc.WaitViewingTop);
+            if (pc.WaitNoPopup && !Actions.NoPopups()) parts.Add("popups still open");
+            if (pc.WaitWorldChange && !Actions.WorldChanged(pc.WorldSig)) parts.Add("world did not change");
+            if (pc.WaitItemsInGrid && !Actions.ItemsInGridAbove(pc.ItemsInGridBefore)) parts.Add("item did not enter the grid");
+            if (pc.WaitLooseAbove && !Actions.LooseItemsOrCombat(
+                    pc.LooseBefore, pc.Before == null ? -1 : pc.Before.BattlePhase))
+                parts.Add("no loot appeared and no combat started");
+            if (pc.WaitNoLeveling && !Actions.LevelingDone()) parts.Add("level-up screen still open");
+            if (pc.WaitDungeon && !Actions.DungeonReady()) parts.Add("dungeon never appeared");
+            if (parts.Count == 0) return "";
+            return " (" + string.Join("; ", parts.ToArray()) + ")";
         }
 
         private void RejectQueued(string reason)

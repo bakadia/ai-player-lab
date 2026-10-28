@@ -63,7 +63,10 @@ namespace BphBridge
             w.Prop("seq", seq);
             w.Prop("ts", ts);
             w.Prop("scene", scene);
-            w.Prop("mode", DeriveMode(gm, pl, battlePhase, invPhase));
+            bool hasDungeon = false;
+            try { hasDungeon = DungeonPlayer.main != null; } catch { }
+            string mode = DeriveMode(gm, pl, battlePhase, invPhase, hasDungeon);
+            w.Prop("mode", mode);
             w.Prop("battle_phase", battlePhase);
             w.Prop("inventory_phase", invPhase);
 
@@ -165,10 +168,18 @@ namespace BphBridge
             w.EndArray();
 
             // ---- backpack ----
+            // 三个来源分开：
+            //   allItems  —— 场上所有 Item2（含地上战利品、奖励候选）
+            //   inGrid    —— 真正在背包格子里的（游戏自己的 GetAllItemsInGrid）
+            //   loose     —— 背包外的（地上/奖励候选），走开会被销毁
+            // 只列 allItems 里「有 gridPositions」的会把地上的也算进背包 —— 实测踩过
+            // （教程开局 3 件其实是摆在房间里的，走开就没了）。
             List<Item2> allItems = null;
             try { allItems = Item2.allItems; } catch { }
+            List<Item2> inGrid = World.ItemsInGrid();
+            List<Item2> loose = World.ItemsLoose();
 
-            int itemsTotal = 0;
+            int itemsTotal = allItems == null ? -1 : allItems.Count;
             int itemsPlaced = 0;
             if (allItems != null)
             {
@@ -176,21 +187,42 @@ namespace BphBridge
                 {
                     Item2 it = allItems[i];
                     if (it == null) continue;
-                    itemsTotal++;
                     if (IsPlaced(it)) itemsPlaced++;
                 }
             }
 
+            // 背包容量：给 agent 一个「还能不能捡」的判据（P1）。
+            int gridTotal = -1;
+            int freeSquares = -1;
+            try
+            {
+                List<GridSquare> grids = GridSquare.allGrids;
+                if (grids != null)
+                {
+                    gridTotal = grids.Count;
+                    freeSquares = 0;
+                    for (int i = 0; i < grids.Count; i++)
+                    {
+                        if (Actions.SquareOpen(grids[i])) freeSquares++;
+                    }
+                }
+            }
+            catch { }
+
             w.Name("backpack").BeginObject();
             w.Prop("items_total", itemsTotal);
             w.Prop("items_placed", itemsPlaced);
+            w.Prop("items_in_grid", inGrid == null ? -1 : inGrid.Count);
+            w.Prop("items_loose", loose == null ? -1 : loose.Count);
+            w.Prop("grid_squares", gridTotal);
+            w.Prop("free_squares", freeSquares);
             w.Name("items").BeginArray();
-            if (allItems != null)
+            if (inGrid != null)
             {
                 int written = 0;
-                for (int i = 0; i < allItems.Count && written < MaxItems; i++)
+                for (int i = 0; i < inGrid.Count && written < MaxItems; i++)
                 {
-                    Item2 it = allItems[i];
+                    Item2 it = inGrid[i];
                     if (it == null) continue;
                     if (!IsPlaced(it)) continue;
 
@@ -248,6 +280,11 @@ namespace BphBridge
                     else if (energyCost > playerEnergy) reason = "no_energy";
                     else if (manaCost > 0) reason = "needs_mana";
                     else if (goldCost > 0) reason = "needs_gold";
+                    // 游戏自己的判断：被动饰品（REVERSAL AMULET / LUCKY STAR）没有主动费用，
+                    // CanBeUsedActive 会返回 0。以前只看 playType，于是这类物品进了 legal，
+                    // 用一次什么也不发生，账本里被记成 0/0（SPIKE-08 §7.2）。
+                    // 传的是物品自己 costs 的拷贝，不会改游戏状态；返回 -1 时才不信它。
+                    else if (canActive == 0) reason = "cannot_use_active";
 
                     bool usable = reason == null;
 
@@ -293,6 +330,14 @@ namespace BphBridge
                     w.Prop("max_charges", imaxcharges);
                     w.Prop("play_type", iplaytype);
                     w.Prop("text", itext);
+                    try
+                    {
+                        Transform ip = it.parentInventoryGrid;
+                        w.Prop("parent", ip == null ? "" : ip.name);
+                        Transform ilp = it.lastParentInventoryGrid;
+                        w.Prop("last_parent", ilp == null ? "" : ilp.name);
+                    }
+                    catch { }
                     w.Name("cells").BeginArray();
                     for (int c = 0; c < cells.Count; c++) w.Value(cells[c]);
                     w.EndArray();
@@ -302,6 +347,50 @@ namespace BphBridge
                 }
             }
             w.EndArray();
+
+            // 背包外的物品：地上战利品 / 奖励候选。走开会被游戏销毁，所以它是「限时」的。
+            w.Name("unplaced").BeginArray();
+            if (loose != null)
+            {
+                int unplacedWritten = 0;
+                for (int i = 0; i < loose.Count && unplacedWritten < MaxItems; i++)
+                {
+                    Item2 it = loose[i];
+                    if (it == null) continue;
+                    int uuid = I(delegate { return it.GetInstanceID(); }, 0);
+                    string uname = S(delegate { return it.displayName; });
+                    List<string> ucells = new List<string>();
+                    try
+                    {
+                        GridObject ugo = it.gridObject;
+                        if (ugo != null && ugo.gridPositions != null)
+                        {
+                            for (int c = 0; c < ugo.gridPositions.Count && c < 16; c++)
+                            {
+                                Vector2Int v = ugo.gridPositions[c];
+                                ucells.Add(v.x + "," + v.y);
+                            }
+                        }
+                    }
+                    catch { }
+                    w.BeginObject();
+                    w.Prop("uid", "i" + uuid);
+                    w.Prop("name", uname);
+                    try
+                    {
+                        Transform up = it.parentInventoryGrid;
+                        w.Prop("parent", up == null ? "" : up.name);
+                    }
+                    catch { }
+                    w.Name("cells").BeginArray();
+                    for (int c = 0; c < ucells.Count; c++) w.Value(ucells[c]);
+                    w.EndArray();
+                    w.EndObject();
+                    unplacedWritten++;
+                }
+            }
+            w.EndArray();
+
             w.EndObject();
 
             // ---- 战斗统计（游戏自己记的，白送的交叉校验） ----
@@ -319,6 +408,11 @@ namespace BphBridge
             w.Prop("items_used", CombatStat(gf, 0, 1));
             w.EndObject();
             w.EndObject();
+
+            // ---- 地图 / 非战斗界面（只读探针，见 MapProbe.cs） ----
+            // 静态证据显示「地图节点」是 DungeonEvent，不是 EventButton；
+            // 两套模型都摊平输出，让真实数据来判定。这一块不含任何动作。
+            MapProbe.Write(w, mode, gm);
 
             // ---- 合法动作（Bridge 算，Agent 不猜） ----
             w.Name("legal").BeginArray();
@@ -346,13 +440,37 @@ namespace BphBridge
                     w.Prop("energy", legalUses[i].Energy);
                     w.EndObject();
                 }
+
+                // 战斗里掉在地上的东西：战斗一结束就会被销毁（SPIKE-06 §18），
+                // 所以「捡起来」必须进合法动作，否则 agent 只能眼睁睁看它消失。
+                List<Item2> looseInBattle = World.ItemsLoose();
+                if (looseInBattle != null)
+                {
+                    for (int i = 0; i < looseInBattle.Count && i < 4; i++)
+                    {
+                        Item2 lit = looseInBattle[i];
+                        if (lit == null) continue;
+                        int luid = I(delegate { return lit.GetInstanceID(); }, 0);
+                        string lname = S(delegate { return lit.displayName; });
+                        w.BeginObject();
+                        w.Prop("type", "place_item");
+                        w.Prop("uid", "i" + luid);
+                        w.Prop("name", lname);
+                        w.EndObject();
+                    }
+                }
+
                 w.BeginObject();
                 w.Prop("type", "end_turn");
                 w.EndObject();
             }
+            else if (hasDungeon && (mode == "map" || mode == "intro"))
+            {
+                // 地图/序章：能开门、能走房间、能触发事件、能升级、能关弹窗。
+                // 具体动作由 MapProbe.WriteLegal 描述，agent 负责选。
+                MapProbe.WriteLegal(w);
+            }
             w.EndArray();
-
-            // ---- counters ----
             int statuses = 0;
             try { if (Status.allStatuses != null) statuses = Status.allStatuses.Count; } catch { }
             w.Name("counters").BeginObject();
@@ -436,20 +554,36 @@ namespace BphBridge
         }
 
         /// <summary>
-        /// mode 是启发式。已知的三个：
+        /// mode 是启发式。已知的四个：
         ///   menu     —— 单例还没建出来（主菜单）
+        ///   intro    —— floor 还是 0，但地牢对象已经存在（教程 / 序章）。
+        ///               实测：教程全程 floor=0，之前被判成 menu，
+        ///               地图细节因此被整段丢掉（SPIKE-06 §14）。
         ///   reorganize —— inventoryPhase == specialReorganization(3)
         ///                 中污染/诅咒时会进这个阶段，等玩家摆好再点「结束整理」
         ///   battle   —— battlePhase 1..4
-        ///   map      —— 其余
+        ///   map      —— floor >= 1
         /// </summary>
-        private static string DeriveMode(GameManager gm, Player pl, int battlePhase, int invPhase)
+        private static string DeriveMode(GameManager gm, Player pl, int battlePhase, int invPhase,
+                                         bool hasDungeon)
         {
             if (gm == null || pl == null) return "menu";
+
+            // 死亡要先判：实测挂掉时 mode 还是 battle、legal 空、inventoryPhase 是 locked，
+            // 没有专门的「死亡态」。唯一可靠的信号是 Status.health <= 0（SPIKE-06 §21）。
+            int hp = -1;
+            try
+            {
+                Status st = pl.stats;
+                if (st != null) hp = st.health;
+            }
+            catch { }
+            if (hp <= 0) return "dead";
+
             if (invPhase == 3) return "reorganize";
             if (battlePhase >= 1 && battlePhase <= 4) return "battle";
             int floor = I(delegate { return gm.floor; }, 0);
-            if (floor <= 0) return "menu";
+            if (floor <= 0) return hasDungeon ? "intro" : "menu";
             return "map";
         }
 

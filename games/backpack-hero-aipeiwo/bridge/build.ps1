@@ -56,6 +56,7 @@ $refs = @(
     (Join-Path $melon   'MelonLoader.dll')
     (Join-Path $managed 'UnityEngine.dll')
     (Join-Path $managed 'UnityEngine.CoreModule.dll')
+    (Join-Path $managed 'UnityEngine.UI.dll')
     (Join-Path $managed 'Assembly-CSharp.dll')
 )
 
