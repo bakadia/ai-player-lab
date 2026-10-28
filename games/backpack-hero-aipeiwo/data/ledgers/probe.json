@@ -1,0 +1,40 @@
+{
+  "items": {
+    "LIQUID ARMOR": {
+      "block_sum": 25,
+      "damage_sum": 0,
+      "effects": {},
+      "samples": 1
+    },
+    "MEAL": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "samples": 1
+    },
+    "ROUGH BUCKLER": {
+      "block_sum": 70,
+      "damage_sum": 0,
+      "effects": {},
+      "samples": 10
+    },
+    "SPOILED MILK": {
+      "block_sum": 36,
+      "damage_sum": 0,
+      "samples": 2
+    },
+    "WOODEN SWORD": {
+      "absorbed_sum": 70,
+      "block_sum": 0,
+      "damage_sum": 470,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 2,
+          "sum": 2.0
+        }
+      },
+      "samples": 84
+    }
+  },
+  "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
+  "schema": "bph.items.v1"
+}

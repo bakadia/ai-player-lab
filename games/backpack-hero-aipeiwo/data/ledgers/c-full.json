@@ -1,0 +1,36 @@
+{
+  "items": {
+    "MEAL": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {},
+      "energy_sum": 12,
+      "samples": 6
+    },
+    "ROUGH BUCKLER": {
+      "block_sum": 189,
+      "damage_sum": 0,
+      "effects": {},
+      "samples": 27
+    },
+    "SPOILED MILK": {
+      "block_sum": 36,
+      "damage_sum": 0,
+      "samples": 2
+    },
+    "WOODEN SWORD": {
+      "absorbed_sum": 164,
+      "block_sum": 0,
+      "damage_sum": 1285,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 15,
+          "sum": 15.0
+        }
+      },
+      "samples": 231
+    }
+  },
+  "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
+  "schema": "bph.items.v1"
+}

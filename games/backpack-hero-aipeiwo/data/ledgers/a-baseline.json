@@ -1,0 +1,28 @@
+{
+  "items": {
+    "DISGUSTING FOOD": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "energy_sum": 2,
+      "samples": 1
+    },
+    "MEAL": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "samples": 1
+    },
+    "SPOILED MILK": {
+      "block_sum": 36,
+      "damage_sum": 0,
+      "samples": 2
+    },
+    "WOODEN SWORD": {
+      "absorbed_sum": 41,
+      "block_sum": 0,
+      "damage_sum": 468,
+      "samples": 80
+    }
+  },
+  "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用",
+  "schema": "bph.items.v1"
+}

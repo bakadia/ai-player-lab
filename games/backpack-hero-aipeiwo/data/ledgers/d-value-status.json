@@ -1,0 +1,68 @@
+{
+  "items": {
+    "CAVE FISH": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "status:regen:player": {
+          "count": 1,
+          "sum": 4.0
+        }
+      },
+      "samples": 1
+    },
+    "MEAL": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {},
+      "energy_sum": 12,
+      "samples": 6
+    },
+    "ROUGH BUCKLER": {
+      "block_sum": 182,
+      "damage_sum": 0,
+      "effects": {},
+      "samples": 26
+    },
+    "ROUGH WHETSTONE": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {},
+      "samples": 1
+    },
+    "SPOILED MILK": {
+      "block_sum": 36,
+      "damage_sum": 0,
+      "samples": 2
+    },
+    "WOODEN BLADE": {
+      "absorbed_sum": 7,
+      "block_sum": 0,
+      "damage_sum": 35,
+      "effects": {},
+      "samples": 6
+    },
+    "WOODEN SWORD": {
+      "absorbed_sum": 155,
+      "block_sum": 0,
+      "damage_sum": 1289,
+      "effects": {
+        "status:fire:player": {
+          "count": 2,
+          "sum": 3.0
+        },
+        "status:rage:enemy": {
+          "count": 11,
+          "sum": 11.0
+        },
+        "status:regen:player": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 228
+    }
+  },
+  "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
+  "schema": "bph.items.v1"
+}

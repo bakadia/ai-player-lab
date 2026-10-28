@@ -14,6 +14,10 @@ runtime/
 games/*/runtime/
 data/runs/
 games/*/data/runs/
+games/*/data/ab-combat/
+
+# 临时工作区（反编译产物、探针截图、一次性的 try/ 脚本）
+.scratch/
 
 # 本机
 *.log

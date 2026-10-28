@@ -7,7 +7,8 @@
 **这是实验产出，不是官方数据。** 由 `agent/ledger.py` 在打的过程中自动累积：
 
 ```json
-{"items": {"WOODEN SWORD": {"samples": 4, "damage_sum": 28, "block_sum": 0}},
+{"items": {"WOODEN SWORD": {"samples": 4, "damage_sum": 28, "block_sum": 0,
+                            "effects": {"status:rage:enemy": {"count": 3, "sum": 3}}}},
  "note": "...", "schema": "bph.items.v1"}
 ```
 
@@ -17,6 +18,8 @@
 | `damage_sum` | 累计实际打掉的血（击杀按剩余血量算） |
 | `block_sum` | 累计给自己加的护甲 |
 | `absorbed_sum` | 累计被对方格挡吃掉的量（有才写） |
+| `energy_sum` | 累计净回能量（有才写） |
+| `effects` | 结构化回执里的非伤害效果；键形如 `status:BURN:enemy`、`max_hp`、`items:spawned`、`phase:inventory:3`，值为 `{count, sum}` |
 
 要注意的：
 
@@ -26,10 +29,13 @@
 - 已知偏差：被格挡的那一刀 `damage_sum` 记 0，`absorbed_sum` 记真实吸收量。
   所以 `damage_sum / samples` **不是**「这件物品的平均伤害」，而是
   「打在有护甲目标上的平均净输出」。要算理论伤害得 `(damage_sum + absorbed_sum) / samples`。
+- `effects` 只记「delta 看不见」的东西（状态/最大生命/幸运/物品自身状态/生成物品/整理阶段）；
+  伤害和护甲不重复记。没有 `effects` 的老条目一律当「没测过」，不是「测出来是 0」。
 
 ## `runs/` — 每局回放
 
-`run.py` 写的 JSONL，一行一个事件（`decide` / `act` / `stuck` / `leave_battle`）。
+`run.py` / `loop.py` 写的 JSONL，一行一个事件（`decide` / `act` / `map` / `dead` / `retry` / `stuck` / `end`）。
+`act` 事件带 `receipt`（结构化战斗回执，见 `docs/SPIKE-09-combat-receipt.md`）。
 **不进 git**（`.gitignore` 里有 `games/*/data/runs/`），因为它增长快且可重跑。
 
 > `*.bak` 一律不进仓库——那是调试时的临时备份。

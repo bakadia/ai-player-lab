@@ -1,11 +1,23 @@
 {
   "items": {
+    "SPOILED MILK": {
+      "block_sum": 36,
+      "damage_sum": 0,
+      "samples": 2
+    },
     "WOODEN SWORD": {
+      "absorbed_sum": 120,
       "block_sum": 0,
-      "damage_sum": 28,
-      "samples": 4
+      "damage_sum": 884,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 7,
+          "sum": 7.0
+        }
+      },
+      "samples": 159
     }
   },
-  "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用",
+  "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用。2026-10-28 清掉了旧桥接测出的 0/0 条目（HEAT/CURSED POTION、MEAL），它们不是「没效果」，是当时量不到。",
   "schema": "bph.items.v1"
 }
