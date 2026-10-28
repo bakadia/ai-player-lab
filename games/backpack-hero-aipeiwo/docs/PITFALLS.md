@@ -142,3 +142,92 @@ python 正好撞上。是**瞬时竞争**，不是权限配错、也不是文件
   `PermissionError` 一样当「还没好，再等等」处理，统一用 `OSError` 捕获。
 - 判据：**同一个文件手动能读、程序刚读失败** → 基本就是瞬时竞争，别去动权限。
 - 写的一方用「临时文件 + 原子替换」只是必要条件，不能保证读者那一瞬间一定成功。
+
+## E8 · 用「类型名像不像」代替「它在场景里是什么角色」
+
+**怎么发现的**：交接文档一度断言「地图节点就是 `EventButton`」，依据是
+wiki 说「地图节点在代码里是 EventButton」，而 `EventButton` 确实有 23 个字段、
+带 `PossibleOutcome` 和 `PerfromEffect` 协程——名字和「节点」对得上。
+
+后来把字段签名逐条看下来：
+
+```
+requirement = goldCost / itemSacrifice / itemSelect / carvingSelectNonForged
+requiredGold / requiredItemType / requiredRarities / sacrificeAccepted
+possibleOutcomes[] / buttonText / chosenOutCome / played
+PayCosts() / ShowButtons() / PerfromEffect()
+```
+
+这是**事件对话框里的选项按钮**（付钱、献祭、选一件），不是地图上的地点。
+真正的地图是 `DungeonEvent`（16 种类型）+ `DungeonRoom` + `Door` + `DungeonPlayer`。
+
+**为什么坑**：`EventButton` 确实会「在地图阶段出现」，所以观察到的现象和结论不矛盾；
+但它是**已经在事件内部**才出现的 UI，不是「事件的位置」。一旦当成节点，
+下一步就会设计出不存在的动作（`choose_node(index)`），整条线索作废。
+
+**以后怎么办**：
+
+- 区分「世界对象」和「UI 控件」，先看三样：
+  - 有没有**位置/归属**字段（`transform` / `room` / `position` / `doorNumber`）；
+    UI 控件一般只有 `buttonText` / `onClick` / `possibleOutcomes` / `requirement`。
+  - 有没有 `static List<T>` 全量枚举——世界对象常见，UI 控件一般没有。
+  - 它在什么条件下被实例化：跟着**场景/房间**生成，还是跟着**对话框**生成。
+- 「这个类型在地图阶段能看到」≠「这个类型就是地图的内容」。
+- 结论落到文档时标明**证据等级**：静态签名 / 运行时实测。
+  只有前者时，措辞必须是「疑似」，并且下一步要设计一个能证伪它的实测。
+
+## E9 · `inventory_phase=3` 但 `inSpecialReorg=false`，`FinishReorganizeButton()` 是空操作
+
+**怎么发现的**：一局在战斗中用 `CURSED POTION` 后进入整理阶段（`inventory_phase=3`、
+`specialReorganization`），loop 连发 4 次 `finish_reorganize`，每次都是
+`ok=false changed=false ms=20000 error=timeout (... inventoryPhase still reorganize)`。
+屏幕上的「结束整理」按钮看得见、点得动，但点完没反应。
+
+**真相**：反编译 `GameManager.FinishReorganizeButton()`（用 MelonLoader 自带 Mono.Cecil
+写了个临时 IL dumper）后看到第一段：
+
+```
+if (!inSpecialReorg && inventoryPhase != choose(2) && !limitedItemReorganize) return;
+```
+
+也就是说，**方法自己会先看 `inSpecialReorg` 这个布尔**；`inventory_phase==3` 并不是它的判据。
+当游戏因为某种原因把 `inSpecialReorg` 清成 false 却仍停在 phase 3 时，方法直接 return，
+既不报错也不改变状态。UI 按钮绑的就是这个方法，所以点按钮同样没用。
+
+**为什么坑**：state 只暴露 `inventory_phase`，看起来「已经识别对了」，但真正的门是另一个字段；
+20 秒超时像「按钮没点到 / 动画没结束」，很容易往输入或时序方向查。
+
+**以后怎么办**：
+
+- `state.ui` 现在同时输出 `in_special_reorg` 和 `skippable_reorganization`（v7 起）。
+  先看 `in_special_reorg` 是不是 false，再怀疑别的。
+- 偶发一次 no-op 很常见（本次 80 步里第一次 20s 超时、第二次 1.7s 成功）；
+  loop 的重试是有效的。
+- 如果连续多次 false，不要继续点：直接 `retry_run` 重开（本次实测能恢复），
+  或者加一个只读诊断 action 把 `itemsForSpecialReorganization` 打出来再决定。
+- 不要用「直接置 `inventoryPhase=0`」硬修——`FinishReorganizeButton()` 还负责
+  `ClearAreasForSpecialReorganization`、`RemoveItemsOutsideGrid`、`ChangeCurse` 等清理，
+  跳过会留下脏状态。
+
+## E10 · 被动饰品进了 `legal`，用一次 0/0，账本永远翻不了身
+
+**怎么发现的**：`REVERSAL AMULET` / `LUCKY STAR` 这类饰品被 `use_item` 后
+`ack.ok=false changed=false`；按「只记已验证样本」的规则不记账本，
+但 `explored` 已记上，之后永远 0 分。`TUNIC` 也出现过同样的 `ok=false`。
+
+**真相**：旧 `StateReader` 的合法性只看 `playType == Active(0)` 和 `is_relic`。
+被动饰品的 `playType` 也是 Active（0），但 `Item2.CanBeUsedActive(...)` 返回 0：
+它没有主动费用/条件，主动使用本来就什么都不发生。
+`REVERSAL AMULET` 的 wiki 效果是「这一行每有一个 Hazard，相邻武器 +1 伤害」——纯被动。
+
+**为什么坑**：这不是「效果不可见」，是「这个物品根本不该被使用」。
+回执能说清「用了但什么都没发生」，但正确做法是**不让它进 legal**。
+
+**以后怎么办**：
+
+- v7 起 `CanBeUsedActive` 返回 0 是硬门（reason=`cannot_use_active`），不再进 legal；
+  返回 -1（调用失败）才退回手写规则。
+- 传的是物品自己 `costs` 的拷贝；不要传空表——空表会让所有物品都返回 false
+  （上一班踩过，`/r` 的注释还留着）。
+- 判断「被动/主动」不能只看 `playType`；`Item2.ItemType` 的 Accessory(6)/Relic(22)
+  只能当辅助信号，最终以游戏自己的 `CanBeUsedActive` 为准。
