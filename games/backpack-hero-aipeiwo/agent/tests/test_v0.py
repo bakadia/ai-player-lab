@@ -166,6 +166,122 @@ def test_no_legal():
     print("PASS no legal actions")
 
 
+def test_aware_block_subtracts_purchased_armor():
+    from policy import Flags, choose
+
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("Sword", 6, 0)
+        led.record_use("Buckler", 0, 7)
+        items = [
+            {"uid": "i1", "name": "Sword", "energy_cost": 1},
+            {"uid": "i2", "name": "Buckler", "energy_cost": 1},
+        ]
+        st = state_with(items, enemy_hp=40)
+        st["enemies"][0]["attacks"] = [{"type": 0, "power": 9}]
+
+        # 还没买盾：来袭 9，7 点格挡值 7 > 剑 6 -> 用盾（w=1.0）
+        act, _ = choose(st, led, set())
+        assert act["uid"] == "i2", "block weight 1.0 时 7 甲应压过 6 伤"
+
+        # 已经买了 18 点甲：再买盾一点用都没有 -> 用剑
+        st2 = state_with(items, enemy_hp=40)
+        st2["player"]["block"] = 18
+        st2["enemies"][0]["attacks"] = [{"type": 0, "power": 9}]
+        act, _ = choose(st2, led, set(), Flags(aware_block=True))
+        assert act["uid"] == "i1", "护甲已经够挡住全部来袭时不该再买盾"
+
+        # -1 是哨兵，不能当成「负的护甲」让来袭变成 10
+        st3 = state_with(items, enemy_hp=40)
+        st3["player"]["block"] = -1
+        st3["enemies"][0]["attacks"] = [{"type": 0, "power": 9}]
+        act, why = choose(st3, led, set(), Flags(aware_block=True))
+        assert "incoming=9 " in why or "incoming=9(" in why, why
+        print("PASS aware_block")
+
+
+def test_explore_threat_uses_unknown_defensive_item():
+    from policy import Flags, choose
+
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("Sword", 6, 0)          # 已知的剑，1 费 6 伤
+        items = [
+            {"uid": "i1", "name": "Sword", "energy_cost": 1},
+            {"uid": "i2", "name": "Buckler", "energy_cost": 1},   # 账本里没有
+        ]
+        f = Flags(explore_threat=True)
+
+        # 来袭 9：未知物品按 0.8×9=7.2 估值，压过剑的 5.9 -> 去试它
+        st = state_with(items, enemy_hp=40)
+        st["enemies"][0]["attacks"] = [{"type": 0, "power": 9}]
+        act, why = choose(st, led, set(), f)
+        assert act["uid"] == "i2", why
+        assert "explore against the threat" in why, why
+
+        # 没有来袭：未知物品不值得试，老老实实打输出
+        st2 = state_with(items, enemy_hp=40)
+        st2["enemies"][0]["attacks"] = []
+        act, _ = choose(st2, led, set(), f)
+        assert act["uid"] == "i1", "没有威胁时不该白试未知物品"
+
+        # 开关关着时保持老行为：0.5 的探索分永远输给剑
+        act, _ = choose(st, led, set(), Flags())
+        assert act["uid"] == "i1", "关掉开关必须回到 v0.1 行为"
+        print("PASS explore_threat")
+
+
+def test_explore_threat_survival_prior_when_lethal():
+    from policy import Flags, choose
+
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("Sword", 6, 0)
+        items = [
+            {"uid": "i1", "name": "Sword", "energy_cost": 1},
+            {"uid": "i2", "name": "Buckler", "energy_cost": 1},
+        ]
+        st = state_with(items, enemy_hp=40)
+        st["player"]["hp"] = 2                    # 下一击必死
+        st["enemies"][0]["attacks"] = [{"type": 0, "power": 7}]
+        act, why = choose(st, led, set(), Flags(explore_threat=True))
+        assert act["uid"] == "i2", why
+        assert "next hit is lethal" in why, why
+
+        # 但能一击清场时，击杀优先于探索
+        led.record_use("Buckler", 0, 7)
+        st2 = state_with(items, enemy_hp=5)
+        st2["player"]["hp"] = 2
+        st2["enemies"][0]["attacks"] = [{"type": 0, "power": 7}]
+        act, why = choose(st2, led, set(), Flags(explore_threat=True))
+        assert act["uid"] == "i1" and "lethal=True" in why, why
+        print("PASS explore survival prior")
+
+
+def test_value_energy_credits_refund():
+    from policy import Flags, choose
+
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("Sword", 6, 0)
+        # 0 费、回 2 能量的消耗品：0 伤害 0 格挡，不折价就恒为 0 分
+        led.record_use("Elixir", 0, 0, energy=2)
+        items = [
+            {"uid": "i1", "name": "Sword", "energy_cost": 1},
+            {"uid": "i2", "name": "Elixir", "energy_cost": 0},
+        ]
+        st = state_with(items, enemy_hp=40)
+        st["enemies"][0]["attacks"] = [{"type": 0, "power": 9}]
+
+        act, _ = choose(st, led, set(), Flags())
+        assert act["uid"] == "i1", "不折价时消耗品是 0 分，永远没人用"
+
+        act, why = choose(st, led, set(), Flags(value_energy=True))
+        assert act["uid"] == "i2", why
+        assert "energy_gain" in why, why
+        print("PASS value_energy")
+
+
 def test_damage_from_delta():
     assert _damage_from({"enemies": {"e1": -7}}) == 7
     assert _damage_from({"enemies": {"e1": -7, "e2": -3}}) == 10
@@ -190,6 +306,46 @@ def test_absorbed():
     print("PASS absorbed from delta")
 
 
+def test_receipt_effects_make_status_item_visible():
+    from policy import Flags, choose
+
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        receipt = {
+            "action": "use_item",
+            "item": "Heat Potion",
+            "effects": [
+                {"kind": "status", "from": "Heat Potion", "to": "player",
+                 "status": "HEAT", "delta": 1, "value": 1},
+                {"kind": "max_hp", "to": "player", "delta": 2},
+                {"kind": "items", "field": "spawned", "count": 1},
+                {"kind": "phase", "field": "inventory", "from": 0, "to": 3},
+            ],
+        }
+        led.record_use("Heat Potion", 0, 0, receipt=receipt)
+        assert led.estimate_damage("Heat Potion") == 0.0
+        eff = led.estimate_effects("Heat Potion")
+        assert eff["status:HEAT:player"] == 1.0, eff
+        assert eff["max_hp"] == 2.0, eff
+        assert eff["items:spawned"] == 1.0, eff
+        assert eff["phase:inventory:3"] == 1.0, eff
+        # items/phase 记账但不打分：生成的不一定是好东西，进整理通常是代价
+        assert led.effect_score("Heat Potion") == 3.0, led.effect_score("Heat Potion")
+
+        items = [{"uid": "i1", "name": "Heat Potion", "energy_cost": 0}]
+        st = state_with(items, enemy_hp=30)
+
+        # 没有回执/不打开开关：0 伤害 0 格挡 -> 只能 end_turn
+        act, _ = choose(st, led, set(), Flags())
+        assert act["type"] == "end_turn", act
+
+        # 打开 value_status：状态效果把分数抬到正数 -> 会用
+        act, why = choose(st, led, set(), Flags(value_status=True))
+        assert act["uid"] == "i1", why
+        assert "effects=" in why, why
+        print("PASS receipt effects")
+
+
 def test_ledger_absorbed():
     with tempfile.TemporaryDirectory() as td:
         led = Ledger(Path(td) / "items.json")
@@ -210,6 +366,11 @@ if __name__ == "__main__":
     test_incoming_damage()
     test_block_value()
     test_block_item_preferred_when_threatened()
+    test_aware_block_subtracts_purchased_armor()
+    test_explore_threat_uses_unknown_defensive_item()
+    test_explore_threat_survival_prior_when_lethal()
+    test_value_energy_credits_refund()
+    test_receipt_effects_make_status_item_visible()
     test_damage_from_delta()
     test_absorbed()
     test_ledger_absorbed()

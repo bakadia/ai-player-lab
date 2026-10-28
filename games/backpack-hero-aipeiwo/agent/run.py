@@ -99,8 +99,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n[step {steps}] seq={st.get('seq')} mode={mode} "
                   f"hp={player_hp} ap={st.get('player', {}).get('energy')} enemies={len(enemies)}")
 
-            if player_hp is not None and player_hp <= 0:
+            if player_hp is not None and player_hp <= 0 and mode != "menu":
                 print("玩家已阵亡，结束")
+                break
+
+            # bridge 现在会把 hp<=0 单独标成 dead（挂掉时游戏本身还是 battle）
+            if mode == "dead":
+                print("玩家已阵亡（mode=dead），结束")
+                record({"event": "dead", "seq": st.get("seq")})
                 break
 
             if mode not in ("battle", "reorganize"):
@@ -179,6 +185,11 @@ def main(argv: list[str] | None = None) -> int:
                 ledger.save()
                 explored.add(item_name.strip())
                 print(f"     账本记录 {item_name!r}: dmg={dmg} block={blk} absorbed={absorbed}")
+
+            # 摆放失败的物品别再试：背包可能真的放不下，反复试会把整局拖死
+            if action.get("type") == "place_item" and not ack.get("changed"):
+                explored.add(f"place:{action.get('uid', '')}")
+                print(f"     放弃摆放 {action.get('uid')}（{action.get('name', '')}）")
 
             if not ack.get("changed"):
                 nochange_streak += 1

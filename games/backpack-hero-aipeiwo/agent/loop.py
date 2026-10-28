@@ -1,0 +1,604 @@
+"""整局循环：地图 → 房间 → 战斗 → 升级 → 下一间，一直跑。
+
+    python games/backpack-hero-aipeiwo/agent/loop.py --max-steps 200
+
+和 `run.py` 的区别：`run.py` 只打一场，看到 `mode=map` 就退出；
+这个会在 map / battle / reorganize 之间来回切，直到死、通关或步数用完。
+
+**战斗策略完全复用 `policy.py`，这里不碰**。本文件只负责三件地图侧的事：
+
+1. 地图决策：挑房间（战斗 > 宝箱 > 机会 > 出口）
+2. 升级收尾：`level_up` 打开界面、`finish_level_up` 关掉
+3. 捡掉落物：地上的东西在战斗结束瞬间会被销毁（SPIKE-06 §18/§20）
+
+四条硬规矩和 run.py 一致：看 ack、防卡死、写 JSONL、别把失败当成功。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "adapter"))
+
+from client import Bridge, BridgeError  # noqa: E402
+from ledger import Ledger  # noqa: E402
+from policy import Flags, choose, flags_label, score_action, set_flags  # noqa: E402
+
+MAX_CONSECUTIVE_NOCHANGE = 4
+MAX_LEVEL_ATTEMPTS = 6   # 同一次升级最多试几次，超过就停下来等人看 UI
+
+# 房间里事件的优先级：先打怪（有经验），再拿东西，最后走出口
+EVENT_PRIORITY = {
+    "Enemy": 0,
+    "Elite": 0,
+    "Chest": 1,
+    "Chance": 2,
+    "Store": 3,
+    "SimpleClickItem": 2,
+    "Exit": 9,
+    "ExitAlternate": 9,
+}
+
+
+def _damage_from(delta: dict[str, Any], pre_hp: dict[str, int] | None = None) -> int:
+    total = 0
+    for uid, v in (delta.get("enemies") or {}).items():
+        if isinstance(v, int):
+            if v < 0:
+                total += -v
+        elif v == "gone" and pre_hp:
+            total += pre_hp.get(uid, 0)
+    return total
+
+
+def _absorbed_from(delta: dict[str, Any]) -> int:
+    total = 0
+    for v in (delta.get("enemies_block") or {}).values():
+        if isinstance(v, int) and v < 0:
+            total += -v
+    return total
+
+
+def _scorecard(st: dict[str, Any]) -> dict[str, Any]:
+    """一局的收尾指标。A/B 要比的就是这些，别只留一个 seq。"""
+    run = st.get("run") or {}
+    pl = st.get("player") or {}
+    return {
+        "floor": run.get("floor"),
+        "hp": pl.get("hp"),
+        "max_hp": pl.get("max_hp"),
+        "level": run.get("level"),
+        "gold": run.get("gold"),
+        "turn": run.get("turn"),
+        "enemies": len(st.get("enemies") or []),
+    }
+
+
+def _event_rooms(state: dict[str, Any], blocked: set[str] | None = None) -> list[tuple[int, str, str]]:
+    """(优先级, 房间 uid, 事件 uid)。只收「未结束、看得见、有房间」的事件。
+
+    `blocked` 是「确认做不了的事件」——比如地图开着时 StartEvent 是空操作
+    （SPIKE-08 §8）。不排除它们的话，这些事件永远是「未完成」，
+    每一轮都会被重新选中，于是玩家在两个房间之间来回走。
+    """
+    blocked = blocked or set()
+    mp = state.get("map") or {}
+    rooms = mp.get("rooms") or []
+    events = mp.get("events") or []
+    out: list[tuple[int, str, str]] = []
+
+    for ev in events:
+        if ev.get("finished"):
+            continue
+        if ev.get("uid") in blocked:
+            continue
+        pos = ev.get("pos") or [0, 0]
+        prio = EVENT_PRIORITY.get(ev.get("type_name", ""), 5)
+
+        for r in rooms:
+            rp = r.get("pos") or [0, 0]
+            if abs(rp[0] - pos[0]) < 0.01 and abs(rp[1] - pos[1]) < 0.01:
+                if r.get("locked") or not r.get("visible", True):
+                    break
+                out.append((prio, r["uid"], ev["uid"]))
+                break
+
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="run a whole dungeon floor loop")
+    ap.add_argument("--runtime", help="runtime 目录")
+    ap.add_argument("--max-steps", type=int, default=200)
+    ap.add_argument("--max-seconds", type=float, default=1800)
+    ap.add_argument("--ledger", help="账本路径")
+    ap.add_argument("--dry-run", action="store_true", help="只打印决策，不发命令")
+    ap.add_argument("--dump-decisions", action="store_true",
+                    help="每次战斗决策都写一份完整 state + 候选分数（复盘/A-B 用，日志会变大）")
+
+    # ---- 战斗策略开关（默认全关 = v0.1 老行为）。A/B 靠这三个。 ----
+    ap.add_argument("--aware-block", action="store_true",
+                    help="SPIKE-07 §4-1：incoming 减去已经买到的 player.block")
+    ap.add_argument("--ratio-energy", action="store_true",
+                    help="SPIKE-07 §4-2：按每点能量的分数选（务必和 --aware-block 一起开）")
+    ap.add_argument("--explore-threat", action="store_true",
+                    help="没见过的物品按「能挡掉多少威胁」估值，否则账本永远学不到防御物品")
+    ap.add_argument("--value-energy", action="store_true",
+                    help="把「+N 能量」折成分数，否则回能量的消耗品恒为 0 分、永远不会被用")
+    ap.add_argument("--value-status", action="store_true",
+                    help="用结构化回执给「状态/最大生命/幸运」类效果估值（需要新桥接）")
+    ap.add_argument("--lethal-explore", dest="explore_threat", action="store_true",
+                    help=argparse.SUPPRESS)   # 旧名字，等同 --explore-threat
+    ap.add_argument("--record-unverified", action="store_true",
+                    help="老行为：动作没生效也记一条账本样本（会把物品永久记成 0/0，慎用）")
+    ap.add_argument("--level-up-via", default="select", choices=["select", "spaces", "end"],
+                    help="收升级界面的方式。实测只有 select 有效（默认），另两个留作对照")
+    ap.add_argument("--auto-retry", action="store_true",
+                    help="阵亡后调 GameManager.Retry() 再开一局（需要新桥接的 retry_run）")
+    ap.add_argument("--max-retries", type=int, default=8,
+                    help="--auto-retry 最多重开几次")
+    args = ap.parse_args(argv)
+
+    flags = set_flags(Flags(
+        aware_block=args.aware_block,
+        ratio_energy=args.ratio_energy,
+        explore_threat=args.explore_threat,
+        value_energy=args.value_energy,
+        value_status=args.value_status,
+    ))
+    print(f"policy flags: {flags_label(flags)}")
+
+    bridge = Bridge(args.runtime)
+    ledger = Ledger(args.ledger)
+
+    runs_dir = HERE.parent / "data" / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = runs_dir / ("loop-" + time.strftime("%Y%m%d-%H%M%S") + ".jsonl")
+    log = log_path.open("w", encoding="utf-8")
+
+    explored: set[str] = set()
+    tried_rooms: set[str] = set()
+    blocked_events: set[str] = set()   # 确认做不了的事件（地图开着时的 start_event）
+    bad_rooms: set[str] = set()        # legal 里有、但 move_to_room 实际走不到的房间
+    place_skips: dict[str, int] = {}   # place_item 失败后换候选格的重试计数
+    close_map_tries = 0                # 同一次「地图开着」里试过几次 close_map
+    arrivals: dict[str, int] = {}      # 每个房间到过几次（用来终结「两房间来回走」）
+    bad_uids: dict[str, Any] = {}      # uid -> 在哪个回合里失败过（只在本回合内剔除）
+    level_attempt = 0
+    nochange_streak = 0
+    reorg_fails = 0                 # 连续多少次 finish_reorganize 没生效（E9）
+    steps = 0
+    retries = 0
+    started = time.monotonic()
+    last_st: dict[str, Any] | None = None
+    max_floor: int | None = None
+
+    def record(obj: dict[str, Any]) -> None:
+        log.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        log.flush()
+
+    print(f"loop log: {log_path}")
+    record({"event": "start", "flags": flags_label(flags),
+            "flags_detail": {"aware_block": flags.aware_block,
+                             "ratio_energy": flags.ratio_energy,
+                             "explore_threat": flags.explore_threat,
+                             "value_energy": flags.value_energy,
+                             "value_status": flags.value_status},
+            "ledger": str(ledger.path), "ledger_items": sorted(ledger.data.keys()),
+            "max_steps": args.max_steps})
+
+    try:
+        while steps < args.max_steps:
+            if time.monotonic() - started > args.max_seconds:
+                print("!! 超过总时限，停")
+                break
+
+            try:
+                st = bridge.state()
+            except BridgeError as exc:
+                print(f"!! 读状态失败：{exc}")
+                time.sleep(0.3)
+                continue
+
+            mode = st.get("mode")
+            hp = (st.get("player") or {}).get("hp")
+            enemies = st.get("enemies") or []
+            ui = st.get("ui") or {}
+            last_st = st
+            f = (st.get("run") or {}).get("floor")
+            if isinstance(f, int) and f >= 0:
+                max_floor = f if max_floor is None else max(max_floor, f)
+
+            print(f"\n[step {steps}] seq={st.get('seq')} mode={mode} hp={hp} "
+                  f"enemies={len(enemies)} in_grid={(st.get('backpack') or {}).get('items_in_grid')} "
+                  f"loose={(st.get('backpack') or {}).get('items_loose')}")
+
+            if mode == "menu":
+                # 主菜单上 hp 是 -1（哨兵），不能当阵亡
+                print("回到主菜单，结束")
+                break
+
+            if mode == "dead" or (hp is not None and hp <= 0):
+                print("玩家已阵亡，结束")
+                record({"event": "dead", "seq": st.get("seq"), **_scorecard(st)})
+                if args.auto_retry and retries < args.max_retries:
+                    # 桥接没有「回主菜单」的动作，但 GameManager.Retry() 是 public。
+                    # 成功的话整局循环就能无人值守地跑完 A/B。
+                    retries += 1
+                    print(f"     尝试 retry_run 重开第 {retries} 次…")
+                    ack = bridge.act({"type": "retry_run"}, timeout_ms=30000)
+                    record({"event": "retry", "n": retries, "ok": ack.get("ok"),
+                            "changed": ack.get("changed"), "error": ack.get("error")})
+                    if ack.get("changed"):
+                        explored.clear()
+                        tried_rooms.clear()
+                        blocked_events.clear()
+                        bad_rooms.clear()
+                        place_skips.clear()
+                        level_attempt = 0
+                        nochange_streak = 0
+                        reorg_fails = 0
+                        continue
+                    print(f"     retry 没生效（{ack.get('error')}），停")
+                break
+
+            # ---------------- 战斗 / 整理 ----------------
+            if mode in ("battle", "reorganize"):
+                if not st.get("legal"):
+                    print("  等玩家回合（legal 为空）")
+                    time.sleep(0.3)
+                    steps += 1
+                    continue
+
+                # 桥接的 legal 会列进「当前其实用不了」的物品（实测 SUNFLOWER SHIV
+                # 0 费、能量也够，但每次 use_item 都 ok=false）。同一回合里失败过的
+                # 物品先剔掉，否则会在同一个动作上连撞 4 次被判卡死。
+                turn_now = (st.get("run") or {}).get("turn")
+                legal_now = st.get("legal") or []
+                kept = [a for a in legal_now
+                        if not (a.get("type") == "use_item"
+                                and bad_uids.get(a.get("uid")) == turn_now)]
+                if len(kept) != len(legal_now):
+                    st = dict(st)
+                    st["legal"] = kept
+                    print(f"     （本回合已剔除用不了的物品 {len(legal_now) - len(kept)} 个）")
+
+                action, why = choose(st, ledger, explored, flags)
+                if action is None:
+                    print(f"没有可做的动作：{why}")
+                    break
+
+                print(f"  -> {action.get('type')} {action.get('uid', '')}  ({why})")
+                record({"event": "decide", "seq": st.get("seq"), "action": action, "why": why})
+
+                # 决策级日志：把「当轮完整 state + 每个候选的分数」一起落盘。
+                # 没有这份原料，事后就没法复盘「当时为什么选这个」——
+                # 也正是 SPIKE-07 里做 A/B 最缺的东西。
+                if args.dump_decisions:
+                    cands = []
+                    for a in st.get("legal") or []:
+                        sc, wy = score_action(a, st, ledger, explored, flags)
+                        cands.append({"type": a.get("type"), "uid": a.get("uid"),
+                                      "score": round(sc, 3), "why": wy})
+                    record({"event": "decision", "seq": st.get("seq"),
+                            "chosen": action, "candidates": cands, "state": st,
+                            "flags": flags_label(flags)})
+
+                if args.dry_run:
+                    break
+
+                pre_hp = {e["uid"]: e.get("hp", 0) for e in enemies}
+                item_name = None
+                if action.get("type") == "use_item":
+                    for it in (st.get("backpack") or {}).get("items", []):
+                        if it["uid"] == action.get("uid"):
+                            item_name = it.get("name", "")
+                            break
+
+                if action.get("type") == "place_item":
+                    _sk = place_skips.get(action.get("uid", ""), 0)
+                    if _sk:
+                        action = dict(action)
+                        action["skip"] = _sk
+
+                ack = bridge.act(action, timeout_ms=20000)
+                delta = ack.get("delta") or {}
+                record({"event": "act", "action": action, "ok": ack.get("ok"),
+                        "changed": ack.get("changed"), "ms": ack.get("ms"),
+                        "delta": delta, "receipt": ack.get("receipt"),
+                        "error": ack.get("error")})
+                print(f"     ok={ack.get('ok')} changed={ack.get('changed')} ms={ack.get('ms')} "
+                      f"delta={json.dumps(delta, ensure_ascii=False)}")
+                if ack.get("error"):
+                    print(f"     error={ack['error']}")
+
+                # 用不掉的物品：记下「本回合失败」，下一次 choose 会把它剔掉。
+                if action.get("type") == "use_item" and not ack.get("changed"):
+                    bad_uids[action.get("uid")] = turn_now
+                    print("     （这个物品用不了，本回合不再选它）")
+
+                if item_name:
+                    # 只有「真的发生了可见变化」才进账本。
+                    # 以前不管成没成都记一条——一次失败的使用会被永久记成 0/0 均值，
+                    # 等于把「没测到」当成「测出来是 0」，物品就再也翻不了身了。
+                    verified = ack.get("ok") and ack.get("changed")
+                    if verified or args.record_unverified:
+                        # 净回能量：回能量的消耗品全靠这一项才在打分里存在（见 policy §4）。
+                        # 只记**正**的净收益：普通攻击物品的 -1 是「花掉的费用」，
+                        # 那一项由 policy 的 ENERGY_WEIGHT 管，记进来会重复扣一次。
+                        gain = delta.get("player_energy")
+                        gain = gain if isinstance(gain, int) and gain > 0 else 0
+                        ledger.record_use(item_name, _damage_from(delta, pre_hp),
+                                          max(0, int(delta.get("player_block", 0) or 0)),
+                                          _absorbed_from(delta), energy=gain,
+                                          receipt=ack.get("receipt"))
+                        ledger.save()
+                    explored.add(item_name.strip())
+
+                if action.get("type") == "place_item" and ack.get("changed"):
+                    place_skips.pop(action.get("uid", ""), None)
+                if action.get("type") == "place_item" and not ack.get("changed"):
+                    uid = action.get("uid", "")
+                    if place_skips.get(uid, 0) < 1:
+                        # 桥接会按形状挑候选格；第一个候选失败时换下一个再试一次。
+                        place_skips[uid] = place_skips.get(uid, 0) + 1
+                        print("     摆放失败（形状/遮挡），换候选格重试一次")
+                    else:
+                        explored.add(f"place:{uid}")
+                        place_skips.pop(uid, None)
+                if action.get("type") == "finish_level_up" and not ack.get("changed"):
+                    print("     升级界面收不掉，下一轮再试")
+
+                # PITFALLS E9：inventory_phase=3 但 inSpecialReorg=false 时，
+                # FinishReorganizeButton() 第一行就 return，点多少次都没用。
+                # 偶发一次的交回下一轮重试；连续两次仍 no-op 且有 --auto-retry
+                # 就用 retry_run 重开，**不要**硬置 inventoryPhase（会跳过清理）。
+                if action.get("type") == "finish_reorganize":
+                    if ack.get("changed"):
+                        reorg_fails = 0
+                    else:
+                        reorg_fails += 1
+                        ui_now = st.get("ui") or {}
+                        print(f"     整理收尾没生效（第 {reorg_fails} 次，"
+                              f"in_special_reorg={ui_now.get('in_special_reorg')}）")
+                        if (reorg_fails >= 2 and args.auto_retry
+                                and retries < args.max_retries):
+                            retries += 1
+                            print(f"     连续 {reorg_fails} 次 no-op，retry_run 重开（E9 兜底）")
+                            ack2 = bridge.act({"type": "retry_run"}, timeout_ms=30000)
+                            record({"event": "reorg_retry", "n": retries,
+                                    "fails": reorg_fails,
+                                    "in_special_reorg": ui_now.get("in_special_reorg"),
+                                    "ok": ack2.get("ok"), "changed": ack2.get("changed"),
+                                    "error": ack2.get("error")})
+                            if ack2.get("changed"):
+                                explored.clear()
+                                tried_rooms.clear()
+                                blocked_events.clear()
+                                bad_rooms.clear()
+                                place_skips.clear()
+                                level_attempt = 0
+                                nochange_streak = 0
+                                reorg_fails = 0
+                                steps += 1
+                                continue
+                            print(f"     retry_run 没生效（{ack2.get('error')}），继续重试")
+
+                nochange_streak = 0 if ack.get("changed") else nochange_streak + 1
+                if nochange_streak >= MAX_CONSECUTIVE_NOCHANGE:
+                    print("!! 连续多次没变化，判定卡死，停")
+                    record({"event": "stuck", "streak": nochange_streak})
+                    break
+
+                steps += 1
+                continue
+
+            # ---------------- 地图 ----------------
+            legal = st.get("legal") or []
+            types = {a.get("type") for a in legal}
+
+            # 升级界面真的没了才重置重试计数；只要还有 pending 的升级
+            # （level_up 或 finish_level_up 还合法），就继续算同一次。
+            if "finish_level_up" not in types and "level_up" not in types:
+                level_attempt = 0
+
+            if ui.get("viewing_top") != 1:
+                close_map_tries = 0
+
+            # 地图开着时 StartEvent 是空操作（SPIKE-08 §8）。先试 close_map；
+            # 只有 close_map 连续失败两次，才把这个事件拉黑、换个目标。
+            # （以前是一看到「地图开着 + start_event 合法」就拉黑，close_map 根本没机会跑。）
+            if "start_event" in types and ui.get("viewing_top") == 1 and close_map_tries >= 2:
+                ev_uid = ((st.get("map") or {}).get("player") or {}).get("event")
+                if ev_uid and ev_uid not in blocked_events:
+                    blocked_events.add(ev_uid)
+                    print(f"     （地图开着，{ev_uid} 开不了；拉黑它，换个目标）")
+                    record({"event": "event_blocked", "seq": st.get("seq"), "event_uid": ev_uid})
+
+            action: dict[str, Any] | None = None
+
+            if "finish_level_up" in types:
+                # 实测（HANDOFF §0）：**只有** `Select()`×numberToUnlock 再 `EndLevelUp()`
+                # 真的能收掉升级界面；`ChangeSpaces` 和「只调 EndLevelUp」都会
+                # 「关掉又弹回来」。所以默认固定走 select，别按次数升级到别的备选。
+                #
+                # 之前这里把 level_attempt 当成「全局第几次升级」，
+                # 第一次用 select、第二次 spaces、之后一直是 end —— 于是从第二个升级起
+                # 必然陷入「level_up → finish_level_up → 又 level_up」的死循环。
+                # 现在 level_attempt 只在**同一次升级**里累加，界面一关就归零。
+                level_attempt += 1
+                if level_attempt > MAX_LEVEL_ATTEMPTS:
+                    print(f"升级界面第 {level_attempt} 次仍收不掉，停下（需要人工看 UI）")
+                    record({"event": "level_up_stuck", "attempts": level_attempt})
+                    break
+                lvia = args.level_up_via
+                if level_attempt > 2 and lvia == "select":
+                    # 兜底：连续两次 select 没关掉，再给它一次「少选一格」的机会
+                    # （numberToUnlock 可能算多了，多点一下会把已选中的取消）。
+                    action = {"type": "finish_level_up", "via": "select",
+                              "times": max(1, level_attempt - 2)}
+                else:
+                    action = {"type": "finish_level_up", "via": lvia}
+                print(f"     （升级收尾第 {level_attempt} 次，via={action.get('via')}"
+                      f"{'，times=' + str(action.get('times')) if action.get('times') else ''}）")
+            elif "close_popup" in types:
+                action = {"type": "close_popup"}
+            elif ui.get("select_item_dialogues"):
+                # 战后奖励 / 事件里的「N 选 1」：桥接新增 pick_dialogue。
+                # 候选物品名还没暴露，先按顺序拿第一个；等快照带上名字再按账本挑。
+                n = ui.get("dialogue_choices")
+                idx = 0
+                if isinstance(n, int) and n > 0:
+                    idx = 0
+                action = {"type": "pick_dialogue", "index": idx}
+                print(f"     （N 选 1 对话框，候选 {n} 个，先拿第 {idx} 个）")
+            elif "level_up" in types:
+                action = {"type": "level_up"}
+            elif any(a.get("type") == "place_item"
+                     and f"place:{a.get('uid')}" not in explored for a in legal):
+                pa = next(a for a in legal if a.get("type") == "place_item"
+                          and f"place:{a.get('uid')}" not in explored)
+                _sk = place_skips.get(pa.get("uid", ""), 0)
+                if _sk:
+                    pa = dict(pa)
+                    pa["skip"] = _sk
+                action = pa
+            elif "open_chest" in types:
+                # 真 Chest 的 StartEvent 是 no-op；桥接新增的 open_chest 走 Chest.OpenChest()。
+                action = next(a for a in legal if a.get("type") == "open_chest")
+            elif "enter_door" in types:
+                # 站在出口房间里：先去下一层，不要傻站着
+                action = next(a for a in legal if a.get("type") == "enter_door")
+            elif "start_event" in types and ui.get("viewing_top") != 1:
+                action = next(a for a in legal if a.get("type") == "start_event")
+            elif "start_event" in types and close_map_tries < 2:
+                # 地图开着时 StartEvent 是空操作（SPIKE-08 §8）。桥接新增了 close_map
+                # （走 nonpublic 的 mapInputHandler，最后手段是直接把 viewingTop 拨回 inventory）。
+                # 但只试两次：万一这个版本不生效，就退回「拉黑这个事件、换房间」，
+                # 不能一直重试同一条死路。
+                close_map_tries += 1
+                action = {"type": "close_map"}
+                print(f"     （地图开着，start_event 无效；先 close_map，第 {close_map_tries} 次）")
+            # 实测（SPIKE-08 §8）：**地图开着时 DungeonPlayer.StartEvent() 是空操作**——
+            # 每次返回 ok=false / ms=400 / delta={} / seq 不动，连点 MAX_CONSECUTIVE_NOCHANGE
+            # 次就被判卡死。而地图关不掉：GameManager 只有 ShowMap(force)，开着时怎么调都不关，
+            # 而 `open_map` 的阶段门是 viewingTop==1，所以「关地图」这个动作根本不存在。
+            # 所以上面那条**故意加了 `viewing_top != 1`**：地图开着时它不匹配，
+            # 分支会继续往下落到「换房间」，避免站在宝箱格上死锁。
+            # 代价是宝箱暂时不捡，等桥接补一个 close_map 再说。
+            elif ui.get("inventory_phase") == 8 and "level_up" not in types:
+                # 胜利画面：屏幕上明明有「升级!」按钮，但桥接的 `can_level_up` 是 false，
+                # 于是 `level_up` 不进 legal，循环只能去点 `open_map` —— 而那个界面下
+                # `viewingTop` 永远上不去，每次都 30 秒超时，连超 4 次就被判卡死。
+                # 动作层没有合法性门（Actions.cs：level_up 直接调 LevelUpButton()），
+                # 所以这里直接发。phase 8 = notInteractable，就是胜利/升级的过渡态。
+                action = {"type": "level_up"}
+                print("     （胜利画面卡在 phase=8，直接发 level_up 兜底）")
+            elif "open_map" in types:
+                action = {"type": "open_map"}
+            else:
+                # 挑房间：按事件优先级，其次按「没去过的」。
+                # **只能从 legal 里的 move_to_room 挑**：地图上有房间是不连通的
+                # （不同 zone / 得走门），对它们发 move_to_room 会一路超时
+                # （实测 30 秒 × 4 次就被判卡死）。
+                moves = [a for a in legal if a.get("type") == "move_to_room"
+                         and a.get("room") not in bad_rooms]
+                reachable = {a.get("room") for a in moves}
+                # 到过两次的房间，它的事件就别再追了——否则「A 的事件开不了 → 去 B →
+                # B 也开不了 → 回 A」会无限来回走（真机实测）。
+                for _p, _room, _ev in _event_rooms(st, blocked_events):
+                    if arrivals.get(_room, 0) >= 2 and _ev not in blocked_events:
+                        blocked_events.add(_ev)
+                        print(f"     （{_room} 到过两次事件还没完成，拉黑 {_ev}）")
+                cands = [c for c in _event_rooms(st, blocked_events) if c[1] in reachable]
+                cur = (st.get("map") or {}).get("player", {}).get("room_at")
+                pick = None
+                for prio, room_uid, ev_uid in cands:
+                    if room_uid == cur:
+                        continue
+                    pick = room_uid
+                    break
+                if pick is None:
+                    # 没有可做的事件了：优先去出口，别在两个房间之间来回走。
+                    exit_rooms = {r for _p, r, _e in _event_rooms(st) if _p == EVENT_PRIORITY["Exit"]}
+                    exits = [a for a in moves if a.get("room") in exit_rooms and a.get("room") != cur]
+                    unvisited = [a for a in moves if a.get("room") not in tried_rooms]
+                    if exits:
+                        pick = exits[0].get("room")
+                    elif unvisited:
+                        pick = unvisited[0].get("room")
+                    elif moves:
+                        pick = moves[0].get("room")
+
+                if pick is None:
+                    print("没有可去的房间，结束")
+                    break
+                tried_rooms.add(pick)
+                action = {"type": "move_to_room", "room": pick, "via": "room"}
+
+            print(f"  -> {action.get('type')} {action.get('room', action.get('uid', ''))}")
+            record({"event": "map", "seq": st.get("seq"), "action": action})
+
+            if args.dry_run:
+                break
+
+            ack = bridge.act(action, timeout_ms=30000)
+            print(f"     ok={ack.get('ok')} changed={ack.get('changed')} ms={ack.get('ms')} "
+                  f"delta={json.dumps(ack.get('delta') or {}, ensure_ascii=False)}")
+            if ack.get("error"):
+                print(f"     error={ack['error']}")
+
+            # 游戏会把「实际走不到」的房间也列进 legal，对它发 move_to_room 只会
+            # 30 秒超时。记住这个房间，本局别再选它（否则一次就能耗掉 2 分钟）。
+            if action.get("type") == "move_to_room" and not ack.get("changed"):
+                bad_rooms.add(action.get("room"))
+            if action.get("type") == "move_to_room" and ack.get("changed"):
+                _arr = action.get("room")
+                arrivals[_arr] = arrivals.get(_arr, 0) + 1
+            # 地图阶段的战利品摆放：和战斗里同一套「换候选格重试一次」。
+            if action.get("type") == "place_item" and ack.get("changed"):
+                place_skips.pop(action.get("uid", ""), None)
+            if action.get("type") == "place_item" and not ack.get("changed"):
+                uid = action.get("uid", "")
+                if place_skips.get(uid, 0) < 1:
+                    place_skips[uid] = place_skips.get(uid, 0) + 1
+                    print("     摆放失败（形状/遮挡），换候选格重试一次")
+                else:
+                    explored.add(f"place:{uid}")
+                    place_skips.pop(uid, None)
+            record({"event": "act", "action": action, "ok": ack.get("ok"),
+                    "changed": ack.get("changed"), "ms": ack.get("ms"),
+                    "delta": ack.get("delta"), "receipt": ack.get("receipt"),
+                    "error": ack.get("error")})
+
+            nochange_streak = 0 if ack.get("changed") else nochange_streak + 1
+            if nochange_streak >= MAX_CONSECUTIVE_NOCHANGE:
+                print("!! 连续多次没变化，判定卡死，停")
+                record({"event": "stuck", "streak": nochange_streak})
+                break
+
+            steps += 1
+
+        print(f"\n结束：{steps} 步，日志 {log_path}")
+        tail = _scorecard(last_st) if last_st else {}
+        tail["max_floor"] = max_floor
+        record({"event": "end", "steps": steps, **tail})
+    finally:
+        log.close()
+        ledger.save()
+
+    print("\n账本：")
+    print(ledger.summary())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

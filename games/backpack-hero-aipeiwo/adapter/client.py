@@ -149,6 +149,14 @@ def main(argv: list[str] | None = None) -> int:
     pu.add_argument("--force", action="store_true")
     sub.add_parser("noop", help="空动作，用来验证链路")
 
+    # 地图 / 非战斗（SPIKE-06）
+    sub.add_parser("open-map", help="打开地图")
+    pm = sub.add_parser("move", help="走到某个房间")
+    pm.add_argument("room", help="state.json 里 room 的 uid，形如 r12345")
+    sub.add_parser("start-event", help="触发当前房间里的事件")
+    sub.add_parser("level-up", help="点升级")
+    sub.add_parser("close-popup", help="关掉所有弹窗")
+
     ph = sub.add_parser("halt", help="急停开关")
     ph.add_argument("value", choices=["on", "off"])
 
@@ -190,6 +198,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "noop":
         _print(br.act({"type": "noop"}))
+        return 0
+
+    if args.cmd == "open-map":
+        _print(br.act({"type": "open_map"}))
+        return 0
+
+    if args.cmd == "move":
+        _print(br.act({"type": "move_to_room", "room": args.room}))
+        return 0
+
+    if args.cmd == "start-event":
+        _print(br.act({"type": "start_event"}))
+        return 0
+
+    if args.cmd == "level-up":
+        _print(br.act({"type": "level_up"}))
+        return 0
+
+    if args.cmd == "close-popup":
+        _print(br.act({"type": "close_popup"}))
         return 0
 
     if args.cmd == "halt":
