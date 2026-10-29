@@ -313,4 +313,48 @@ isCheckingForPuzzle / GameManager.draggingItem != null`。
   不要再依赖 StartDrag/EndDrag。
 - 报错时把 `draggingItem` 的名字打出来，否则「谁占着拖拽态」根本看不出来。
 
+## E14 · `legal` 不是可达性：`move_to_room` 会列出走不到的房间
+
+**怎么发现的**：想去 10 格外的宝箱，对着 `legal` 里的 `move_to_room` 直接发，
+每次都等满 30 秒超时（`timeout after 30076ms (not arrived at r-5858)`）。
+另外还有两个连带现象：
+
+- **地图关着时** `legal` 里只有 `open_map`，一个 `move_to_room` 都没有；
+- 远处房间要**地图开着**才 reveal（`canBeSeenOnMap`），关掉之后又只剩脚下两格。
+
+推论：`move_to_room` 的合法集合 ≠ 图上的邻接关系。真机数据里 `rooms[]` 的
+`pos/doors/blocked/locked/visible` 是**完整**的（连迷雾房间都有 doors），
+所以可达性应该用房间图算，动作层面再和 `legal` 求交集。
+
+**以后怎么办**：
+
+- 用 `agent/mapnav.py`：`RoomGraph.from_state(state)` → `path/first_step`。
+- **一次只发一格**，看 `room_at` 真的变了再走下一格；失败就把这条边记进 `bad_edges`。
+- 走路前确保 `viewing_top == 1`（必要时先发 `open_map`）；到了事件房间再 `close_map`。
+- 迷雾里的下一格点不了时，朝目标方向挑一个「能点到的邻居」先探过去（`first_step` 就是干这个的）。
+
+## E15 · 地图上的 SimpleClickItem：`start_event` 无效，`Play()` 会重复生成
+
+**怎么发现的**：地图房间里有一件东西（事件类型 11 = `SimpleClickItem`，
+`diag_event` 显示 `items_to_spawn: 1, open_prop: true`），
+`start_event` 每次都 `ok=false changed=false`（空操作）。
+IL 里 `DungeonEvent.Play()` 才会把 `itemsToSpawn` 实例化，并给它挂上
+`SimpleClickItem.dungeonEvent`；`SimpleClickItem.Click()` 才是「收走」的入口。
+
+**两个坑**：
+
+1. `Play()` **每调一次就多生成一份**。真机连调三次，`spawned_click_items` 从 2 涨到 4——
+   同一个事件上叠了好几个对象。所以 `Play()` 只能对同一个事件调用一次
+   （桥接新加的 `play_event` 也挡不住调用方重复发）。
+2. `SimpleClickItem.Click()` 在这个环境里**没有**把东西收进背包：
+   `loose_before=0 → loose_after=0`、`in_grid` 不变。它的 `TakeAction()` 是协程，
+   而且 `Click()` 开头有 `gameManager.travelling` / `isOpen` 两道门。
+
+**以后怎么办**：
+
+- 想捡地图上的东西，先把 `play_event` 拆成两步（这一帧只 `Play`，下一帧再 `Click`），
+  或者干脆读 `SimpleClickItem` 上的 `Item2` 自己走入包接口。
+- 别用一个循环去重试 `play_event`——会叠对象。
+
+
 

@@ -20,6 +20,21 @@
       "energy_sum": 1,
       "samples": 1
     },
+    "DEBUFF POTION": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "status:slow:enemy": {
+          "count": 3,
+          "sum": 15.0
+        },
+        "status:weak:enemy": {
+          "count": 3,
+          "sum": 15.0
+        }
+      },
+      "samples": 1
+    },
     "MEAL": {
       "block_sum": 0,
       "damage_sum": 0,
@@ -39,10 +54,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 189,
+      "block_sum": 231,
       "damage_sum": 0,
       "effects": {},
-      "samples": 27
+      "samples": 33
     },
     "SPOILED MILK": {
       "block_sum": 36,
@@ -50,9 +65,9 @@
       "samples": 2
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 256,
+      "absorbed_sum": 270,
       "block_sum": 0,
-      "damage_sum": 1646,
+      "damage_sum": 1647,
       "effects": {
         "gold": {
           "count": 1,
@@ -63,7 +78,7 @@
           "sum": 25.0
         }
       },
-      "samples": 301
+      "samples": 304
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
