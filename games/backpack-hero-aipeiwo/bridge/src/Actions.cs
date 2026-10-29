@@ -1444,6 +1444,15 @@ namespace BphBridge
                 return;
             }
 
+            // 只读诊断：整层所有事件 + 它们 itemsToSpawn 的 prefab 元数据
+            // （哪种 SimpleClickItem、effects 是什么 type）。不用走过去就能知道
+            // 哪个事件会掉物品（type=4）、哪个只是 QuickBoost(+HP/经验/金币)。
+            if (type == "diag_events")
+            {
+                DiagEventsAction(pc);
+                return;
+            }
+
             // 只读诊断：所有 Item2（活跃 / 未激活分开列）。
             // `items_loose` 只统计 allItems 里的，未激活的物品在 state 上等于不存在——
             // 用它区分「生成了但没激活」和「根本没生成」。
@@ -2265,8 +2274,130 @@ namespace BphBridge
             w.Prop("items_to_spawn", EventItemsToSpawn(ev));
             w.Prop("open_prop", EventOpenProp(ev));
             w.Prop("mimic_value", EventMimic(ev));
+            w.Prop("room", EventRoomUid(ev));
+            w.Name("items_to_spawn_detail");
+            WriteSpawnPrefabs(w, ev);
             w.EndObject();
         }
+
+        /// <summary>事件所在房间（先沿 parent 找 DungeonRoom，再按坐标找最近的）。</summary>
+        private static string EventRoomUid(DungeonEvent ev)
+        {
+            try
+            {
+                Transform t = ev.transform.parent;
+                for (int guard = 0; t != null && guard < 8; guard++)
+                {
+                    DungeonRoom r = t.GetComponent<DungeonRoom>();
+                    if (r != null) return World.RoomUid(r);
+                    if (t.parent == t) break;
+                    t = t.parent;
+                }
+                float dist;
+                DungeonRoom near = World.NearestRoom(ev.transform.position, 1.5f, out dist);
+                return near == null ? "" : World.RoomUid(near);
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>
+        /// 事件 `itemsToSpawn` 里的 **prefab**（不实例化、不 Play）是什么、带不带
+        /// SimpleClickItem、那个 SCI 的 `effects` 是什么类型。
+        ///
+        /// 这是「不用走过去就能知道这个事件点下去会掉东西还是只加属性」的关键：
+        /// `effect.type=4(item)` 才会往地上摆物品，QuickBoost 是 0/1/2。
+        /// </summary>
+        private static void WriteSpawnPrefabs(JsonWriter w, DungeonEvent ev)
+        {
+            w.BeginArray();
+            System.Collections.IList list = null;
+            try { list = World.Field(ev, "itemsToSpawn") as System.Collections.IList; } catch { }
+            for (int i = 0; list != null && i < list.Count; i++)
+            {
+                GameObject prefab = list[i] as GameObject;
+                w.BeginObject();
+                w.Prop("name", prefab == null ? "" : prefab.name);
+                SimpleClickItem sci = null;
+                int item2Children = 0;
+                try
+                {
+                    if (prefab != null)
+                    {
+                        sci = prefab.GetComponentInChildren<SimpleClickItem>(true);
+                        Item2[] its = prefab.GetComponentsInChildren<Item2>(true);
+                        item2Children = its == null ? 0 : its.Length;
+                    }
+                }
+                catch { }
+                w.Prop("has_simple_click_item", sci != null);
+                w.Prop("item2_children", item2Children);
+                System.Collections.IList effects = sci == null ? null
+                    : World.Field(sci, "effects") as System.Collections.IList;
+                w.Name("effects").BeginArray();
+                for (int k = 0; effects != null && k < effects.Count; k++)
+                {
+                    w.BeginObject();
+                    object t = World.Field(effects[k], "type");
+                    object n = World.Field(effects[k], "num");
+                    w.Prop("type", t == null ? -1 : Convert.ToInt32(t));
+                    w.Prop("num", n == null ? 0 : Convert.ToInt32(n));
+                    w.EndObject();
+                }
+                w.EndArray();
+                w.EndObject();
+            }
+            w.EndArray();
+        }
+
+        /// <summary>
+        /// 只读：**整层**所有 DungeonEvent 一览（含迷雾房间）。只看 prefab 元数据，
+        /// 不 Play、不实例化、不改任何东西 —— 用来在「走过去」之前就知道
+        /// 哪一格的事件会掉物品（`effects` 里有 `type=4`）。
+        /// </summary>
+        private static void DiagEventsAction(PendingCommand pc)
+        {
+            List<DungeonEvent> all = null;
+            try { all = DungeonEvent.FindAllDungeonEvents(); } catch { }
+            if (all == null) { try { all = DungeonEvent.dungeonEvents; } catch { } }
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("action", "diag_events");
+            w.Prop("floor", EventFloor());
+            w.Prop("count", all == null ? -1 : all.Count);
+            w.Name("events").BeginArray();
+            for (int i = 0; all != null && i < all.Count; i++)
+            {
+                if (all[i] == null) continue;
+                DungeonEvent ev = all[i];
+                w.BeginObject();
+                w.Prop("uid", "d" + ObjId(ev));
+                w.Prop("type", EventType(ev));
+                w.Prop("room", EventRoomUid(ev));
+                w.Prop("finished", EventFinished(ev));
+                w.Prop("open_prop", EventOpenProp(ev));
+                w.Prop("items_to_spawn", EventItemsToSpawn(ev));
+                w.Name("items_to_spawn_detail");
+                WriteSpawnPrefabs(w, ev);
+                try
+                {
+                    w.Prop("x", ev.transform.position.x);
+                    w.Prop("y", ev.transform.position.y);
+                }
+                catch { }
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        private static int EventFloor()
+        {
+            try { return GameManager.main == null ? -1 : GameManager.main.floor; }
+            catch { return -1; }
+        }
+
 
         private static void WriteChestDiag(JsonWriter w, Chest c)
         {

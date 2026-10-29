@@ -391,6 +391,26 @@ TakeAction()               协程，先等 0.4/animator.speed 秒，再按 effec
 - `play_event` 的 ack 门只在事件真有 `type=4` 时才等 loot（`PlayEventExpectsLoot`），
   否则会像 v8.17 第一版那样白等 15 秒还回 `ok=false`。
 
+## E16 · 宝箱开出来、地图上的地上物品：**离开房间就销毁**
+
+**怎么发现的**：`open_chest` 掉了 4 件（LEATHER CAP / LIQUID ARMOR / BOWBLADE /
+APPRENTICE STAFF，`items_loose` 0→4），接着走了三格到另一个房间，
+`items_loose` 直接回到 0，`unplaced` 也空了 —— 一件都没捡到，也捡不回来了。
+
+**为什么**：游戏自己的 `DestroyAllItemsOutsideGrid` 会在换房间时清掉「不在背包格子里」
+的物品（`World.cs` 的注释里早记过：教程开局那 3 件也是摆在地上、走开就没了）。
+所以「地上的东西」是**只在这个房间里有效**的临时状态。
+
+**以后怎么办**：
+
+- 开箱 / 拿到地上物品之后，**当场**用 `place_item`（`place_with_room`）整理完再走；
+  能放的先放，放不下的用 `--make-room N` 丢低价值的换。
+- `loop.py` 本身没问题：`place_item` 分支排在 `open_chest`/`enter_door`/换房间之前，
+  它会先把地上的一件件放进来。**踩坑的是手工流程**：`open_chest` 之后直接用
+  `tools/bph_nav.py go` 走开（这一班就是这么丢的 4 件）。
+- 反过来也成立：想验证「地上物品能不能捡」，**必须**在同一个房间里量，
+  别在下一格回头看 `items_loose`。
+
 
 
 

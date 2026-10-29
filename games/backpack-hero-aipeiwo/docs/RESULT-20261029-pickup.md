@@ -5,7 +5,8 @@
 > 结论**反过来**了：`Click()` 一直是好的，那两次「没捡到」是两个 QuickBoost（+HP/+金币）
 > 事件，本来就不产出物品。
 >
-> 桥接 **v8.17**：**122,880 bytes，SHA256 `B24BA2F9…`**（已部署到 `Mods\BphBridge.dll`）。
+> 桥接 **v8.17 → v8.18**：v8.18 是 **124,416 bytes，SHA256 `7E877A51…`**（已部署）。
+> §1–§4 是 v8.17 的工作，§5 是 v8.18 的追加探针与最终结论。
 
 ## 0. 一句话
 
@@ -88,19 +89,56 @@ effects=[{type:0, num:5}]           -> delta {"player_hp": 4}   （36 → 40，�
 | `bridge/src/BridgeMod.cs` | `play_event` 的 ack 门只在真有 item effect 时才等 loot（否则 QuickBoost 白等 15 秒还回 `ok=false`） |
 | `tools/bph_verify_pickup.py` | 新：两步验收 + effect 类型解释 + hp/gold/level/loose 变化表 + 证据 JSON |
 
+v8.18 追加：
+
+| 位置 | 改动 |
+|---|---|
+| `bridge/src/Actions.cs` | 新只读动作 **`diag_events`**：整层事件 + `itemsToSpawn` 的 prefab 元数据（名称、是否带 SCI、SCI 的 effects、带几个 Item2 子物体）；`diag_event` 的每条事件也带上同样的 `items_to_spawn_detail` 与 `room` |
+| `tools/bph_events.py` | 新：把 `diag_events` 打成表，`item?` 列直接标出「这格会不会掉物品」 |
+| `tools/bph_asset_scan.py` | 新：扫 `Backpack Hero_Data` 里的字符串（prefab 名只在资源里，不在 dll 里） |
+
 ## 4. 验证
 
 - `bridge/build.ps1` → 122,880 bytes；部署后 SHA256 `B24BA2F9EDAD37216EC718846E0AA2EBCE90E9BD5D7185536F9029FE3AEF2B06`
 - `run-tests.ps1` / `test_v0.py` / `test_mapnav.py` 全 ALL PASS
 - 真机 §2.1 / §2.2（v8.16 + v8.17 各一轮）
 
-## 5. 下一步
+## 5. 继续追：`type=4(item)` 的 SimpleClickItem 到底存不存在（v8.18）
 
-1. **还没见到 `type=4(item)` 的 SimpleClickItem**。这一班两层的四个 SCI 全是 QuickBoost。
-   要验证「地上真的掉东西 → 拖进包」，得往下走楼层扫，或者从资源里确认有没有 item 变体
-   的 prefab。`bph_verify_pickup.py` 现在会直接打印 `effect=item x1` / `item_expected=True`，
-   一旦遇到就能自动判断。
-2. 战斗存活 / 扩容（`spacesSaved` 来源）仍在 —— 这一班为了走到第二个 SCI，被 3 场
-   敌人房拦下（`Green Snail ×2`、`Lil Bee + Bearded Dragon`）。
-3. `--make-room` 默认值的 A/B 没做（§3.3 老账）。
-4. `bph_nav.py go` 碰敌人房「打完自动继续」还没串（§3.4 老账）。
+为了不用「一格格走过去撞」，v8.18 加了两个只读探针：
+
+- **`diag_events`**：整层所有 `DungeonEvent` 一览。关键是读
+  `itemsToSpawn` 里 **prefab 本体**（不 Play、不实例化）上的 `SimpleClickItem.effects`
+  ——有 `type=4` 才会往地上摆物品，`0/1/2` 就是 QuickBoost（血/经验/金币）。
+- **`tools/bph_events.py`**：把上面那份 JSON 打成一张表（`item?` 列）。
+- **`tools/bph_asset_scan.py`**：直接扫 `Backpack Hero_Data/*.assets` 里的字符串
+  （prefab 名不在 `Assembly-CSharp.dll` 里，只在序列化资源里）。
+
+真机 + 资源两边对上了：
+
+```
+floor 1 全层 10 个事件（diag_events）：
+  d-5602  type 11  [QuickBoost HP Variant]     hp x5
+  d-5586  type 11  [QuickBoost XP Variant]     exp x5
+  其余：Chest / Door / EventNoNPC / 三队敌人
+
+资源扫描（sharedassets1.assets）里 SimpleClickItem 的 prefab 族只有 6 个：
+  QuickBoost HP Variant / QuickBoost XP Variant / QuickBoost Gold Variant
+  + 各自的 QuickBoost Cursed HP/XP/Gold Variant
+```
+
+**结论**：这个 build 里地图上的 `SimpleClickItem` **只有 QuickBoost（+血/+经验/+金币）
+这一族**，没有「掉物品」的变体。所以「地图上的东西收不进包」这个任务前提本身不成立——
+地图上的物品一直是**地上的 loose item**（教程开局那 3 件、宝箱掉的那 4 件都是），
+走的是早已验收过的 `place_item` 通道。
+
+## 6. 下一步
+
+1. ~~找 `type=4(item)` 的 SimpleClickItem~~ —— 见 §5，这个 build 里没有这一族。
+   以后要「捡地图上的东西」，入口是 loose item，不是 `play_event`。
+2. **宝箱里的东西必须在同一个房间收完**（PITFALLS E16）：这一班开了个宝箱掉 4 件
+   （LEATHER CAP / LIQUID ARMOR / BOWBLADE / APPRENTICE STAFF），往前走两格就全没了
+   （游戏自己的 `DestroyAllItemsOutsideGrid`）。`loop.py` 开完箱应该当场整理。
+3. 战斗存活 / 扩容（`spacesSaved` 来源）—— 仍是主线。
+4. `--make-room` 默认值 A/B、「撞上敌人房打完自动继续」两笔老账。
+
