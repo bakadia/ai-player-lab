@@ -1444,6 +1444,15 @@ namespace BphBridge
                 return;
             }
 
+            // 只读诊断：所有 Item2（活跃 / 未激活分开列）。
+            // `items_loose` 只统计 allItems 里的，未激活的物品在 state 上等于不存在——
+            // 用它区分「生成了但没激活」和「根本没生成」。
+            if (type == "diag_items")
+            {
+                DiagItemsAction(pc);
+                return;
+            }
+
             // 只读诊断：摆放的形状/落点。逐格打印「如果放这里会占哪些格」，
             // 用来解释 place_item 为什么挑了那个 target（旋转、collider offset 都能看见）。
             if (type == "diag_place")
@@ -3220,18 +3229,139 @@ namespace BphBridge
 
         /// <summary>
         /// 触发当前房间的事件（通用入口）。`Chest` 有自己的 `open_chest`，这个主要是给
-        /// **SimpleClickItem**（地图上摆着的东西）用的：`start_event` 对它是一个空操作，
-        /// 真正要做的是 `DungeonEvent.Play()`（实例化 `itemsToSpawn`）再
-        /// `SimpleClickItem.Click()`（把东西收走）。
+        /// **SimpleClickItem**（地图上摆着的东西）用的：`start_event` 对它是一个空操作。
         ///
-        /// `click=false` 只 Play 不点，用来分两步调试（Play 出来的对象 Start() 还没跑过时
-        /// Click 可能被 `isOpen`/`travelling` 挡）。
+        /// 事件流（IL 逐步核对过，v8.17）：
+        ///   1. `DungeonEvent.Play()` 实例化 `itemsToSpawn`，把 `SimpleClickItem.dungeonEvent`
+        ///      绑上去。**Play 自己是幂等的**：开头 `if (GetEventProperty(open)) return;`，
+        ///      生成前先 `AddEventProperty(open, 0)`。所以「Play 会重复生成」不是游戏的锅，
+        ///      是老代码每次都先 `RemoveEventProperty(open)` 再 Play（E15 的根因，已修）。
+        ///   2. `SimpleClickItem.Start()`（**下一帧**才跑）从 `dungeonEvent.GetItems()` 里取出
+        ///      事件底下挂着的真·战利品（`Item2` 子物体），把它们 **SetActive(true)** 并
+        ///      摆到祭坛前面 —— 也就是说「东西变成 loose」发生在 Start 之后的那一帧。
+        ///   3. `SimpleClickItem.Click()` 做的是：动画 + `dungeonEvent.FinishEvent()` +
+        ///      `StartCoroutine(TakeAction())`。`TakeAction` 只处理血量/经验/金币/地牢属性
+        ///      这些效果；`type=item(4)` 它**什么都不做**（东西本来就摆在祭坛前，等玩家拖进包）。
+        ///
+        /// 所以正确的调用序列是 `play_event{click:false}` → 等一两帧 → `play_event{play:false}`，
+        /// 而不是把 Play + Click 挤在同一帧。
+        ///
+        /// 参数：
+        ///   uid          事件 uid（`d123`）；省略则取当前房间里「没结束」的第一个，
+        ///                都结束了就取房间里的第一个（方便事后点它剩下的 SimpleClickItem）。
+        ///   play=bool    默认 true。已经 open/ finished 的事件不再 Play（幂等）。
+        ///   click=bool   默认 true。只点 **isOpen=false** 的 SimpleClickItem，点过的不会重复点。
         /// </summary>
         private static void PlayEventAction(PendingCommand pc)
         {
             string uid = MiniJson.Str(pc.Action, "uid", "");
-            DungeonEvent ev = null;
-            if (uid.Length > 0)
+            bool wantPlay = MiniJson.Bool(pc.Action, "play", true);
+            bool wantClick = MiniJson.Bool(pc.Action, "click", true);
+
+            DungeonEvent ev = FindEventForAction(uid);
+            if (ev == null)
+                throw new InvalidOperationException(uid.Length > 0
+                    ? "event not found: " + uid
+                    : "no event in the current room");
+
+            bool openBefore = EventOpenProp(ev);
+            bool finishedBefore = EventFinished(ev);
+            int looseBefore = World.CountLoose();
+            int inGridBefore = World.CountInGrid();
+            int spawnedBefore = CountClickItemsOf(ev);
+
+            bool played = false;
+            string skip = "";
+            if (wantPlay)
+            {
+                // 幂等：`open` 是 Play 自己打的标记，已经打过就别再调（再调会多生成一份）。
+                if (finishedBefore) skip = "finished";
+                else if (openBefore) skip = "already_open";
+                else { World.CallPrivate(ev, "Play", null); played = true; }
+            }
+            else skip = "play=false";
+
+            int spawned = 0;
+            int clicked = 0;
+            string clickError = "";
+            try
+            {
+                List<SimpleClickItem> scis = ClickItemsOf(ev);
+                spawned = scis.Count;
+                for (int i = 0; wantClick && i < scis.Count; i++)
+                {
+                    SimpleClickItem sci = scis[i];
+                    if (sci == null) continue;
+                    object open = World.Field(sci, "isOpen");
+                    if (open is bool && (bool)open) continue;   // 点过了，再点也没用
+                    try { sci.Click(); clicked++; }
+                    catch (Exception ex) { if (clickError.Length == 0) clickError = ex.GetType().Name + ": " + ex.Message; }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (clickError.Length == 0) clickError = ex.GetType().Name + ": " + ex.Message;
+            }
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("action", "play_event");
+            w.Prop("event", "d" + ObjId(ev));
+            w.Prop("type", EventType(ev));
+            w.Prop("play_requested", wantPlay);
+            w.Prop("click_requested", wantClick);
+            w.Prop("played", played);
+            w.Prop("play_skip", skip);
+            w.Prop("open_before", openBefore);
+            w.Prop("finished_before", finishedBefore);
+            w.Prop("open_after", EventOpenProp(ev));
+            w.Prop("finished_after", EventFinished(ev));
+            w.Prop("items_to_spawn", EventItemsToSpawn(ev));
+            w.Prop("click_items_before", spawnedBefore);
+            w.Prop("click_items_now", spawned);
+            w.Prop("clicked", clicked);
+            if (clickError.Length > 0) w.Prop("click_error", clickError);
+            w.Prop("loose_before", looseBefore);
+            w.Prop("loose_now", World.CountLoose());
+            w.Prop("in_grid_before", inGridBefore);
+            w.Prop("in_grid_now", World.CountInGrid());
+            w.Prop("free_squares", CountFreeSquares());
+
+            // 事件底下挂着的物品（Play 之后它们是 SCI.Start() 里被激活的那批）
+            w.Name("event_items").BeginArray();
+            try
+            {
+                Transform tf = ev.transform;
+                for (int i = 0; i < tf.childCount; i++)
+                {
+                    Item2 it = tf.GetChild(i).GetComponent<Item2>();
+                    if (it != null) WriteItemBrief(w, it);
+                }
+            }
+            catch { }
+            w.EndArray();
+
+            w.Name("click_items").BeginArray();
+            try
+            {
+                List<SimpleClickItem> scis2 = ClickItemsOf(ev);
+                for (int i = 0; i < scis2.Count; i++) WriteSciDiag(w, scis2[i]);
+            }
+            catch { }
+            w.EndArray();
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        // ---------- SimpleClickItem / 地上物品的诊断小件 ----------
+
+        /// <summary>
+        /// 命令要操作的那个事件：给了 uid 就按 uid 找（找不到返回 null），
+        /// 没给就取当前房间里「没结束」的第一个，都结束了就取第一个。
+        /// </summary>
+        private static DungeonEvent FindEventForAction(string uid)
+        {
+            if (uid != null && uid.Length > 0)
             {
                 List<DungeonEvent> all = null;
                 try { all = DungeonEvent.FindAllDungeonEvents(); } catch { }
@@ -3239,35 +3369,50 @@ namespace BphBridge
                 for (int i = 0; all != null && i < all.Count; i++)
                 {
                     if (all[i] == null) continue;
-                    if ("d" + ObjId(all[i]) == uid) { ev = all[i]; break; }
+                    if ("d" + ObjId(all[i]) == uid) return all[i];
                 }
-                if (ev == null) throw new InvalidOperationException("event not found: " + uid);
+                return null;
             }
-            else
+
+            List<DungeonEvent> evs = EventsInRoom(CurrentRoom());
+            for (int i = 0; i < evs.Count; i++)
+                if (evs[i] != null && !EventFinished(evs[i])) return evs[i];
+            for (int i = 0; i < evs.Count; i++)
+                if (evs[i] != null) return evs[i];
+            return null;
+        }
+
+        /// <summary>
+        /// `play_event` 点完之后会不会真的掉东西到地上？
+        /// 只有 effect 里出现 `type=4`（item）才会——`QuickBoost HP/Gold` 这类
+        /// 只改血量/金币，等「loot 出现」只会白等到超时（真机踩过）。
+        /// </summary>
+        internal static bool PlayEventExpectsLoot(Dictionary<string, object> action)
+        {
+            try
             {
-                DungeonRoom room = CurrentRoom();
-                List<DungeonEvent> evs = EventsInRoom(room);
-                for (int i = 0; i < evs.Count; i++)
+                DungeonEvent ev = FindEventForAction(MiniJson.Str(action, "uid", ""));
+                if (ev == null) return false;
+                List<SimpleClickItem> scis = ClickItemsOf(ev);
+                for (int i = 0; i < scis.Count; i++)
                 {
-                    if (evs[i] == null || EventFinished(evs[i])) continue;
-                    ev = evs[i];
-                    break;
+                    System.Collections.IList effects = World.Field(scis[i], "effects") as System.Collections.IList;
+                    for (int k = 0; effects != null && k < effects.Count; k++)
+                    {
+                        object t = World.Field(effects[k], "type");
+                        if (t != null && Convert.ToInt32(t) == 4) return true;
+                    }
                 }
-                if (ev == null)
-                    throw new InvalidOperationException("no unfinished event in the current room");
             }
+            catch { }
+            return false;
+        }
 
-            bool click = MiniJson.Bool(pc.Action, "click", true);
-            bool openBefore = EventOpenProp(ev);
-            int looseBefore = World.CountLoose();
-            int inGridBefore = World.CountInGrid();
-            // `Play()` 和 `open_chest` 里一样：`open` 属性存在时它可能不生成东西
-            if (openBefore) World.CallPrivateEnum(ev, "RemoveEventProperty", 6);
-
-            World.CallPrivate(ev, "Play", null);
-
-            int spawned = 0;
-            bool clicked = false;
+        /// <summary>绑定到这个事件上的所有 SimpleClickItem（含未激活的）。</summary>
+        private static List<SimpleClickItem> ClickItemsOf(DungeonEvent ev)
+        {
+            List<SimpleClickItem> outList = new List<SimpleClickItem>();
+            if (ev == null) return outList;
             try
             {
                 UnityEngine.Object[] objs = UnityEngine.Object.FindObjectsOfType(typeof(SimpleClickItem));
@@ -3277,29 +3422,152 @@ namespace BphBridge
                     if (sci == null) continue;
                     DungeonEvent owner = World.Field(sci, "dungeonEvent") as DungeonEvent;
                     if (owner != ev) continue;
-                    spawned++;
-                    if (click && !clicked)
-                    {
-                        try { sci.Click(); clicked = true; } catch { }
-                    }
+                    outList.Add(sci);
                 }
             }
             catch { }
+            return outList;
+        }
 
+        private static int CountClickItemsOf(DungeonEvent ev)
+        {
+            return ClickItemsOf(ev).Count;
+        }
+
+        private static void WriteItemBrief(JsonWriter w, Item2 it)
+        {
+            w.BeginObject();
+            if (it == null) { w.Prop("name", ""); w.EndObject(); return; }
+            w.Prop("name", it.name);
+            w.Prop("uid", "i" + ObjId(it));
+            w.Prop("display", it.displayName == null ? "" : it.displayName);
+            bool active = false, activeHier = false;
+            try { active = it.gameObject.activeSelf; activeHier = it.gameObject.activeInHierarchy; } catch { }
+            w.Prop("active", active);
+            w.Prop("active_in_hierarchy", activeHier);
+            w.Prop("destroyed", it.destroyed);
+            bool inGrid = false;
+            try { inGrid = it.itemMovement != null && it.itemMovement.inGrid; } catch { }
+            w.Prop("in_grid", inGrid);
+            bool inAll = false;
+            try { inAll = Item2.allItems != null && Item2.allItems.Contains(it); } catch { }
+            w.Prop("in_all_items", inAll);
+            string types = "";
+            try
+            {
+                if (it.itemType != null)
+                    for (int i = 0; i < it.itemType.Count; i++)
+                        types += (i == 0 ? "" : "|") + it.itemType[i].ToString();
+            }
+            catch { }
+            w.Prop("item_type", types);
+            string parent = "";
+            try { parent = it.transform.parent == null ? "" : it.transform.parent.name; } catch { }
+            w.Prop("parent", parent);
+            w.EndObject();
+        }
+
+        private static void WriteSciDiag(JsonWriter w, SimpleClickItem sci)
+        {
+            w.BeginObject();
+            if (sci == null) { w.Prop("uid", ""); w.EndObject(); return; }
+            w.Prop("uid", "s" + ObjId(sci));
+            w.Prop("name", sci.name);
+            bool active = false, activeHier = false;
+            try { active = sci.gameObject.activeSelf; activeHier = sci.gameObject.activeInHierarchy; } catch { }
+            w.Prop("active", active);
+            w.Prop("active_in_hierarchy", activeHier);
+            object open = World.Field(sci, "isOpen");
+            w.Prop("is_open", open is bool && (bool)open);
+            try
+            {
+                w.Prop("x", sci.transform.position.x);
+                w.Prop("y", sci.transform.position.y);
+            }
+            catch { }
+            string parent = "";
+            try { parent = sci.transform.parent == null ? "" : sci.transform.parent.name; } catch { }
+            w.Prop("parent", parent);
+
+            System.Collections.IList effects = World.Field(sci, "effects") as System.Collections.IList;
+            w.Prop("effect_count", effects == null ? -1 : effects.Count);
+            w.Name("effects").BeginArray();
+            for (int i = 0; effects != null && i < effects.Count; i++)
+            {
+                object ef = effects[i];
+                w.BeginObject();
+                object t = World.Field(ef, "type");
+                w.Prop("type", t == null ? -1 : Convert.ToInt32(t));
+                object n = World.Field(ef, "num");
+                w.Prop("num", n == null ? 0 : Convert.ToInt32(n));
+                object ao = World.Field(ef, "assignedObject");
+                GameObject go = ao as GameObject;
+                w.Prop("assigned", go == null ? "" : go.name);
+                if (go != null)
+                {
+                    Item2 it = go.GetComponent<Item2>();
+                    if (it != null)
+                    {
+                        w.Name("item");
+                        WriteItemBrief(w, it);
+                    }
+                }
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+        }
+
+        /// <summary>
+        /// 只读：把所有 `Item2` 摊开看（活跃的 + 未激活的）。
+        ///
+        /// `Item2.GetAllItemsOutsideGrid()`（state 里的 `items_loose`）走的是
+        /// `Item2.allItems`，**未激活的物品不在里面**——「生成出来了但看不见」和
+        /// 「压根没生成」在 state 上是同一个样子。这个动作就是用来分辨这两者的。
+        /// </summary>
+        private static void DiagItemsAction(PendingCommand pc)
+        {
             JsonWriter w = new JsonWriter();
             w.BeginObject();
-            w.Prop("action", "play_event");
-            w.Prop("event", "d" + ObjId(ev));
-            w.Prop("type", EventType(ev));
-            w.Prop("open_before", openBefore);
-            w.Prop("items_to_spawn", EventItemsToSpawn(ev));
-            w.Prop("spawned_click_items", spawned);
-            w.Prop("clicked", clicked);
-            w.Prop("loose_before", looseBefore);
-            w.Prop("loose_after", World.CountLoose());
-            w.Prop("in_grid_before", inGridBefore);
-            w.Prop("in_grid_after", World.CountInGrid());
+            w.Prop("action", "diag_items");
+            int allCount = -1;
+            try { allCount = Item2.allItems == null ? -1 : Item2.allItems.Count; } catch { }
+            w.Prop("all_items", allCount);
+            w.Prop("in_grid", World.CountInGrid());
+            w.Prop("loose", World.CountLoose());
             w.Prop("free_squares", CountFreeSquares());
+
+            w.Name("active").BeginArray();
+            try
+            {
+                UnityEngine.Object[] objs = UnityEngine.Object.FindObjectsOfType(typeof(Item2));
+                for (int i = 0; objs != null && i < objs.Length; i++)
+                    WriteItemBrief(w, objs[i] as Item2);
+            }
+            catch { }
+            w.EndArray();
+
+            // 未激活的：FindObjectsOfType 抓不到，只能 Resources.FindObjectsOfTypeAll，
+            // 但它连 prefab 资源也一起返回，所以按 scene 有效来过滤。
+            w.Name("inactive").BeginArray();
+            try
+            {
+                UnityEngine.Object[] objs = Resources.FindObjectsOfTypeAll(typeof(Item2));
+                for (int i = 0; objs != null && i < objs.Length; i++)
+                {
+                    Item2 it = objs[i] as Item2;
+                    if (it == null) continue;
+                    bool inScene = false;
+                    try { inScene = it.gameObject.scene.IsValid(); } catch { }
+                    if (!inScene) continue;
+                    bool activeHier = false;
+                    try { activeHier = it.gameObject.activeInHierarchy; } catch { }
+                    if (activeHier) continue;
+                    WriteItemBrief(w, it);
+                }
+            }
+            catch { }
+            w.EndArray();
             w.EndObject();
             pc.DiagJson = w.ToString();
         }

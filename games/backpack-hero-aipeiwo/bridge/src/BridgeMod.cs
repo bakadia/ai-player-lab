@@ -159,7 +159,9 @@ namespace BphBridge
                     if (pc.TimeoutMs < 10000) pc.TimeoutMs = 10000;
                 }
 
-                pc.WaitLooseAbove = atype == "open_chest";
+                pc.WaitLooseAbove = atype == "open_chest" ||
+                                    (atype == "play_event" && MiniJson.Bool(pc.Action, "click", true) &&
+                                     Actions.PlayEventExpectsLoot(pc.Action));
                 if (pc.WaitLooseAbove)
                 {
                     pc.LooseBefore = pc.Before == null ? -1 : pc.Before.ItemsLoose;

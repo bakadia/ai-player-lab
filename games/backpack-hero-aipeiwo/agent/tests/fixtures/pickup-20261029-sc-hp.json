@@ -1,0 +1,430 @@
+{
+ "started_at": "2026-10-29 15:43:44",
+ "uid": "",
+ "settle": 1.5,
+ "before": {
+  "seq": 160,
+  "mode": "map",
+  "room": "r-5478",
+  "loose": 0,
+  "in_grid": 3,
+  "free": 0,
+  "unplaced": []
+ },
+ "diag_event": {
+  "id": 824744,
+  "ok": false,
+  "changed": false,
+  "seq_before": 160,
+  "seq_after": 160,
+  "ms": 403,
+  "action": {
+   "type": "diag_event"
+  },
+  "delta": {},
+  "receipt": {
+   "action": "diag_event",
+   "source": "player",
+   "effects": []
+  },
+  "diag": {
+   "player": {
+    "x": 1,
+    "y": 2.5,
+    "room": "r-5478"
+   },
+   "relevant_event": null,
+   "room_events": [
+    {
+     "uid": "d-5680",
+     "type": 11,
+     "finished": false,
+     "items_to_spawn": 1,
+     "open_prop": true,
+     "mimic_value": -1
+    }
+   ],
+   "closed_chests": [],
+   "global_chests": [],
+   "grid": [
+    {
+     "x": -1,
+     "y": -1,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    },
+    {
+     "x": -1,
+     "y": 0,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    },
+    {
+     "x": -1,
+     "y": 1,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    },
+    {
+     "x": 0,
+     "y": -1,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    },
+    {
+     "x": 0,
+     "y": 0,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    },
+    {
+     "x": 0,
+     "y": 1,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    },
+    {
+     "x": 1,
+     "y": -1,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    },
+    {
+     "x": 1,
+     "y": 0,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    },
+    {
+     "x": 1,
+     "y": 1,
+     "parent": "Grid Parent",
+     "pouch": false,
+     "contains": true,
+     "test_for_item": false,
+     "obj": "GridSquare(Clone)"
+    }
+   ],
+   "grid_squares": 9,
+   "free_squares": 0
+  },
+  "error": null
+ },
+ "diag_items_before": {
+  "action": "diag_items",
+  "all_items": 3,
+  "in_grid": 3,
+  "loose": 0,
+  "free_squares": 0,
+  "active": [
+   {
+    "name": "Meal Variant(Clone)",
+    "uid": "i-4306",
+    "display": "MEAL",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Consumable",
+    "parent": "Items"
+   },
+   {
+    "name": "Rough Buckler Variant(Clone)",
+    "uid": "i-4264",
+    "display": "ROUGH BUCKLER",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Shield",
+    "parent": "Items"
+   },
+   {
+    "name": "Wooden Sword Variant(Clone)",
+    "uid": "i-4222",
+    "display": "WOODEN SWORD",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Melee|Weapon",
+    "parent": "Items"
+   }
+  ],
+  "inactive": []
+ },
+ "play_only": {
+  "id": 824746,
+  "ok": false,
+  "changed": false,
+  "seq_before": 160,
+  "seq_after": 160,
+  "ms": 400,
+  "action": {
+   "type": "play_event",
+   "uid": "",
+   "click": false
+  },
+  "delta": {},
+  "receipt": {
+   "action": "play_event",
+   "source": "player",
+   "effects": []
+  },
+  "diag": {
+   "action": "play_event",
+   "event": "d-5680",
+   "type": 11,
+   "play_requested": true,
+   "click_requested": false,
+   "played": false,
+   "play_skip": "already_open",
+   "open_before": true,
+   "finished_before": false,
+   "open_after": true,
+   "finished_after": false,
+   "items_to_spawn": 1,
+   "click_items_before": 1,
+   "click_items_now": 1,
+   "clicked": 0,
+   "loose_before": 0,
+   "loose_now": 0,
+   "in_grid_before": 3,
+   "in_grid_now": 3,
+   "free_squares": 0,
+   "event_items": [],
+   "click_items": [
+    {
+     "uid": "s-8440",
+     "name": "QuickBoost HP Variant(Clone)",
+     "active": true,
+     "active_in_hierarchy": true,
+     "is_open": false,
+     "x": 5.088,
+     "y": -3.75,
+     "parent": "Visual",
+     "effect_count": 1,
+     "effects": [
+      {
+       "type": 0,
+       "num": 5,
+       "assigned": ""
+      }
+     ]
+    }
+   ]
+  },
+  "error": null
+ },
+ "after_play_state": {
+  "seq": 160,
+  "mode": "map",
+  "room": "r-5478",
+  "loose": 0,
+  "in_grid": 3,
+  "free": 0,
+  "unplaced": []
+ },
+ "diag_items_after_play": {
+  "action": "diag_items",
+  "all_items": 3,
+  "in_grid": 3,
+  "loose": 0,
+  "free_squares": 0,
+  "active": [
+   {
+    "name": "Meal Variant(Clone)",
+    "uid": "i-4306",
+    "display": "MEAL",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Consumable",
+    "parent": "Items"
+   },
+   {
+    "name": "Rough Buckler Variant(Clone)",
+    "uid": "i-4264",
+    "display": "ROUGH BUCKLER",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Shield",
+    "parent": "Items"
+   },
+   {
+    "name": "Wooden Sword Variant(Clone)",
+    "uid": "i-4222",
+    "display": "WOODEN SWORD",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Melee|Weapon",
+    "parent": "Items"
+   }
+  ],
+  "inactive": []
+ },
+ "click_only": {
+  "id": 824748,
+  "ok": false,
+  "changed": true,
+  "seq_before": 160,
+  "seq_after": 162,
+  "ms": 15058,
+  "action": {
+   "type": "play_event",
+   "uid": "",
+   "play": false,
+   "click": true
+  },
+  "delta": {
+   "player_hp": 4
+  },
+  "receipt": {
+   "action": "play_event",
+   "source": "player",
+   "effects": [
+    {
+     "kind": "heal",
+     "from": "self",
+     "to": "player",
+     "amount": 4
+    }
+   ]
+  },
+  "diag": {
+   "action": "play_event",
+   "event": "d-5680",
+   "type": 11,
+   "play_requested": false,
+   "click_requested": true,
+   "played": false,
+   "play_skip": "play=false",
+   "open_before": true,
+   "finished_before": false,
+   "open_after": true,
+   "finished_after": true,
+   "items_to_spawn": 1,
+   "click_items_before": 1,
+   "click_items_now": 1,
+   "clicked": 1,
+   "loose_before": 0,
+   "loose_now": 0,
+   "in_grid_before": 3,
+   "in_grid_now": 3,
+   "free_squares": 0,
+   "event_items": [],
+   "click_items": [
+    {
+     "uid": "s-8440",
+     "name": "QuickBoost HP Variant(Clone)",
+     "active": true,
+     "active_in_hierarchy": true,
+     "is_open": true,
+     "x": 5.088,
+     "y": -3.75,
+     "parent": "Visual",
+     "effect_count": 1,
+     "effects": [
+      {
+       "type": 0,
+       "num": 5,
+       "assigned": ""
+      }
+     ]
+    }
+   ]
+  },
+  "error": "timeout after 15058ms (no loot appeared and no combat started)"
+ },
+ "after_click_state": {
+  "seq": 162,
+  "mode": "map",
+  "room": "r-5478",
+  "loose": 0,
+  "in_grid": 3,
+  "free": 0,
+  "unplaced": []
+ },
+ "diag_items_after_click": {
+  "action": "diag_items",
+  "all_items": 3,
+  "in_grid": 3,
+  "loose": 0,
+  "free_squares": 0,
+  "active": [
+   {
+    "name": "Meal Variant(Clone)",
+    "uid": "i-4306",
+    "display": "MEAL",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Consumable",
+    "parent": "Items"
+   },
+   {
+    "name": "Rough Buckler Variant(Clone)",
+    "uid": "i-4264",
+    "display": "ROUGH BUCKLER",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Shield",
+    "parent": "Items"
+   },
+   {
+    "name": "Wooden Sword Variant(Clone)",
+    "uid": "i-4222",
+    "display": "WOODEN SWORD",
+    "active": true,
+    "active_in_hierarchy": true,
+    "destroyed": false,
+    "in_grid": true,
+    "in_all_items": true,
+    "item_type": "Melee|Weapon",
+    "parent": "Items"
+   }
+  ],
+  "inactive": []
+ },
+ "loose_increased": false
+}

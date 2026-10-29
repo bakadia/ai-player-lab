@@ -333,28 +333,64 @@ isCheckingForPuzzle / GameManager.draggingItem != null`。
 - 走路前确保 `viewing_top == 1`（必要时先发 `open_map`）；到了事件房间再 `close_map`。
 - 迷雾里的下一格点不了时，朝目标方向挑一个「能点到的邻居」先探过去（`first_step` 就是干这个的）。
 
-## E15 · 地图上的 SimpleClickItem：`start_event` 无效，`Play()` 会重复生成
+## E15 · 地图上的 SimpleClickItem：**`Click()` 是好的**，坑在「它到底产出什么」和「什么时候量」
 
-**怎么发现的**：地图房间里有一件东西（事件类型 11 = `SimpleClickItem`，
-`diag_event` 显示 `items_to_spawn: 1, open_prop: true`），
-`start_event` 每次都 `ok=false changed=false`（空操作）。
-IL 里 `DungeonEvent.Play()` 才会把 `itemsToSpawn` 实例化，并给它挂上
-`SimpleClickItem.dungeonEvent`；`SimpleClickItem.Click()` 才是「收走」的入口。
+> v8.17 更正。原来的结论（`start_event` 无效 + `Click()` 收不进包）前半句对、后半句是
+> **误判**：当时点的那两个 `SimpleClickItem` 根本不是「掉东西」的事件。
 
-**两个坑**：
+**IL 事实**（`Ildump` 逐方法核对，v8.17）：
 
-1. `Play()` **每调一次就多生成一份**。真机连调三次，`spawned_click_items` 从 2 涨到 4——
-   同一个事件上叠了好几个对象。所以 `Play()` 只能对同一个事件调用一次
-   （桥接新加的 `play_event` 也挡不住调用方重复发）。
-2. `SimpleClickItem.Click()` 在这个环境里**没有**把东西收进背包：
-   `loose_before=0 → loose_after=0`、`in_grid` 不变。它的 `TakeAction()` 是协程，
-   而且 `Click()` 开头有 `gameManager.travelling` / `isOpen` 两道门。
+```
+DungeonEvent.Play()        if (GetEventProperty(open)) return;   // open=6，幂等
+                           if (itemsToSpawn.Count == 0) return;
+                           AddEventProperty(open, 0);            // 先打标记再生成
+                           ... Instantiate(itemsToSpawn[i]) ...  // 绑 SimpleClickItem.dungeonEvent
+SimpleClickItem.Start()    dungeonEvent.GetItems(out items)      // 取事件底下挂着、带 Item2 的子物体
+                           → GetItems 会对带 Item2 的孩子 SetActive(true)（且不还原）
+                           → 把它们摆到祭坛前（back*2 + up*0.25）
+SimpleClickItem.Click()    if (dungeonEvent && IsFinished()) return;
+                           if (gameManager.travelling) return;
+                           if (isOpen) return;                   // 点过一次就不会再进去
+                           ... FinishEvent() + StartCoroutine(TakeAction()) + isOpen = true
+TakeAction()               协程，先等 0.4/animator.speed 秒，再按 effect.type 分发：
+                           0=HP 1=EXP 2=Gold 3=地牢属性 5=meta 6=生成物品
+                           **4=item：什么都不做**（东西是 Start() 摆出来的，靠玩家拖进包）
+```
+
+**真机证据**（`tools/bph_verify_pickup.py`，两层楼四个事件）：
+
+| 事件 | effect | 点下去之后 |
+|---|---|---|
+| d-5680 `QuickBoost HP Variant` | `0 / +5` | `player_hp 36 → 40`（满血截断） |
+| d-5696 `QuickBoost Gold Variant` | `2 / +5` | `gold 0 → 5` |
+| d-5584 `QuickBoost Gold Variant` | `2 / +5` | `gold 0 → 5`，ack `ok=True changed=True` |
+
+也就是说 `Click()` 一点问题都没有。**这层楼上的 SimpleClickItem 全是 `QuickBoost <属性>`
+变体**（HP/Gold），`effects` 只有一条、`assigned` 是空串、`event_items` 是空数组——
+它们本来就不会往地上掉东西，`loose 0 → 0` 是正常结果，不是失败。
+
+**为什么坑**：
+
+1. **effect 类型不同，产出去向完全不同**。只有 `type=4(item)` 才是「东西摆到地上」，
+   而那一份是 `Start()` 干的（Play 之后**下一帧**），不是 `Click()`。
+2. **同一帧量不到**。`Play()` 实例化的对象这一帧还没跑 `Start()`，那时 `items_loose`
+   必然是 0。要看结果必须**隔一两帧再读 state**（`--settle`）。
+3. **`Play()` 本来幂等，是老代码把它破了**。`Play()` 开头就看 `open` 属性；
+   v8.16 的 `play_event` 却每次先 `RemoveEventProperty(open)` 再 `Play()`，于是每发一次
+   就多生成一份（真机 `spawned_click_items` 2→4）。v8.17 去掉了这一行：现在
+   重复发 `play_event{play:true}` 会得到 `play_skip="already_open"`，对象数不变。
 
 **以后怎么办**：
 
-- 想捡地图上的东西，先把 `play_event` 拆成两步（这一帧只 `Play`，下一帧再 `Click`），
-  或者干脆读 `SimpleClickItem` 上的 `Item2` 自己走入包接口。
-- 别用一个循环去重试 `play_event`——会叠对象。
+- 收地图上的东西就是 `play_event{play:false, click:true}`（Play 交给游戏自己，或者
+  只在 `play_skip` 为空时才需要 Play）；两次之间隔 1.5 秒。
+- 先看 diag 里的 `click_items[].effects[].type` 决定预期：不是 4 就别等 loot，
+  等 `hp/gold/exp` 的 delta。
+- `state.backpack.items_loose` 只统计 `Item2.allItems` 里的活跃物品；「生成了但没激活」
+  和「没生成」在 state 上长得一样 → 用新加的 `diag_items`（活跃/未激活分开列）分辨。
+- `play_event` 的 ack 门只在事件真有 `type=4` 时才等 loot（`PlayEventExpectsLoot`），
+  否则会像 v8.17 第一版那样白等 15 秒还回 `ok=false`。
+
 
 
 
