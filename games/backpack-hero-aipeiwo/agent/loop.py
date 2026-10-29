@@ -264,9 +264,10 @@ def main(argv: list[str] | None = None) -> int:
             name=base.get("name", "") or "",
             ledger=ledger,
             db=itemdb,
-            # 战利品环节允许丢：背包满（free=0）时不让丢就一件都拿不到——
-            # 真机就是这么错过回血消耗品的。丢谁仍由价值表决定（别丢唯一武器/续航）。
-            drops_left=drops_left,
+            # 战利品环节允许丢，但**每拿一件最多丢一件**：真机为了塞一根 2 格法杖
+            # 连丢 ELECTRIC WAND + TAI CHI RULER 两件，净亏。丢谁仍由价值表决定
+            #（别丢唯一武器/续航），要丢的比要捡的贵还会直接放弃。
+            drops_left=(1 if loot_mode else drops_left),
             log=lambda s: print(f"     {s}"),
             record=record,
         )

@@ -567,6 +567,39 @@ prefab 资产上没有跑过生命周期，字段就是 null。形状真正的�
 - 判断「是不是卡死」不要只看 `changed=False`（E19），**看房间序列有没有重复**：
   连续两次移动的起点/终点互为对方，就是绕圈。
 
+## E24 · 战后战利品环节的入口是 `AfterBattleButtonPressed`，不是 `LevelUpButton`
+
+**怎么发现的**：`--sustain` 跑了 4 局都没见过一件回血消耗品，`backpack.items_loose`
+在胜利后一直是 0。翻 `GameManager` 的 IL 才看到：
+
+```
+AfterBattleButtonPressed()      → SpawnGoldAndMana + StartLimitedItemGetPeriod()
+                                  + GetSpecialItemsAfterBattle()
+StartLimitedItemGetPeriod()     → totalNumOfItemsAllowedToTake = 3
+                                  numOfItemsAllowedToTake = 3
+                                  Spawn 7 件到 inventoryItemsParent（摆成 2 排）
+                                  limitedItemReorganize = true
+FinishLimitedItemSelection()    → 清 limitedItemReorganize / 配额 / 剩下的战利品
+```
+
+而 `Actions` 里的 `level_up` 只调 `LevelUpManager.LevelUpButton()`。loop 在胜利画面
+（`inventory_phase == 8`）直接发 `level_up`，于是 **战利品环节整段没跑过**：
+不掉东西、不进 `limitedItemReorganize`、`items_loose` 永远是 0。
+
+**以后怎么办**：
+
+- 胜利画面看 `ui.after_battle_button`（非 public 的 `afterBattleButton` 是否 active）
+  和 `ui.battle_button_pressed`：还在且没按过 → 发 `after_battle`。
+- **升级界面开着时 `AfterBattleButtonPressed` 第一行就 return**（`if (levelingUp) return`）。
+  所以正常顺序是：`after_battle`（开升级）→ 收升级 → **再** `after_battle`（这次才摆战利品）。
+  只按 `inventory_phase == 8` 判会漏掉第二次（收完升级后 phase 已经回 0）。
+- 战利品有**配额**（`numOfItemsAllowedToTake`，普通 3 件）。拿满还继续放会被
+  `StartDrag refused ... IsComplete=True` 拒绝；拿够就发 `finish_item_selection`。
+- 战利品要**按价值挑**：游戏给的顺序不可靠，回血消耗品可能排在后面。
+  缺血时治疗按「缺口 / 最大生命」加权，否则会被一把 7 伤武器比下去。
+- 背包满时（`free_squares == 0`）必须允许**丢 1 件换 1 件**，但只准丢一件：
+  真机为了塞一根 2 格法杖连丢两件，净亏。
+
 
 
 
