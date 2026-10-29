@@ -99,8 +99,11 @@ finish_level_up via=end -> delta {"inventory_phase":[0,1], "grid_squares":+4}
 1. **扩容不再卡脖子**，但「9 格包 3 件物品打 3 个敌人」的早期强度问题还在：
    现在可以正常长大，问题是**能不能活到升级**。值得跑几局看存活曲线，
    并考虑「早期多打敌人房拿经验」vs「绕开敌人保命」的取舍。
-2. `loop.py` 里那条 `place_item` 重试（满包 + 地上有战利品时，`--make-room` 没生效）
-   要单独查：真机上出现过「同一件 loot 连发两次 place_item 都不 changed」，最后靠走开
-   放弃（然后按 E16 就没了）。
+2. `loop.py` 里那条 `place_item` 重试要复现一次：满包（9/9）+ 地上 4 件 +
+   `--make-room 1` 时，`data/runs/loop-20261029-1614*.jsonl` 里**只有**一串
+   `{"event":"map","action":{"type":"place_item","uid":...}}`，没有 `drop_for_room`
+   也没有 `place_no_room`——说明 `place_with_room` 可能走了「no probe」的兜底分支，
+   丢东西的额度根本没被用上。（老日志 `loop-20261029-151413.jsonl` 里是有
+   `place_no_room` 的，所以这条路径至少曾经工作过。）
 3. E16：开完箱当场整理（手工流程最容易踩）。
 4. `--make-room` 默认值 A/B、「撞上敌人房打完自动继续」两笔老账。
