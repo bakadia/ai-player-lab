@@ -93,6 +93,12 @@ KILL_TURNS = 2.0
 # 「这一击能不能打死某个敌人」用账本均伤判断，均伤有波动，留一点余量更稳。
 KILL_SLACK = 0.5
 
+# 炸弹怪（Bomb 一族，真机见过 "Hermit Crab Bomb"）：几回合后自爆，一次掉 26 血。
+# 它平时的攻击力可能是 0，所以 kill_value（按攻击力折价）完全看不见它——
+# 单独给一笔「趁早炸掉」的分数。数值取 25，和实测的一次自爆伤害同量级。
+BOMB_NAME_HINTS = ("BOMB",)
+BOMB_KILL_VALUE = 25.0
+
 # 结构化回执里「一个状态点 / 一点最大生命 / 一点幸运」值多少分。
 # 1.0 只是让这类物品不再恒为 0；具体值应该等更多样本再调，不要拍脑袋调大。
 STATUS_VALUE = 1.0
@@ -349,6 +355,11 @@ def _score_parts(
                     if isinstance(p, int) and p > 0:
                         threat += p
             kill_value += threat * KILL_TURNS
+            ename = str(e.get("name") or "").upper()
+            if any(h in ename for h in BOMB_NAME_HINTS):
+                # 炸弹怪：自爆伤害不看它的常规攻击力，单独加分（见 BOMB_KILL_VALUE）。
+                kill_value += BOMB_KILL_VALUE
+                why_extra += f" bomb({e.get('name')})"
         kill_value = min(kill_value, LETHAL_BONUS)
         if kill_value > 0:
             why_extra += f" kill_value={kill_value:.1f}(T={KILL_TURNS})"
@@ -452,7 +463,12 @@ def reward_score(name: str, db: ItemDB | None, hp: int = 0, max_hp: int = 0) -> 
         return 0.25                      # 不认识的候选给一点点分，别永远排第一
     score = 0.0
     if st.heal > 0 and max_hp > 0:
-        score += min(st.heal, float(max(0, max_hp - hp))) * SUSTAIN_WEIGHT
+        missing = float(max(0, max_hp - hp))
+        # 缺血时治疗更值钱：按「缺口占最大生命的比例」加权。
+        # 不加权的话，7/40 血时 heal 10（10 分）会输给一把 7 伤武器（14 分），
+        # 真机战利品里就这么错过过回血消耗品。
+        urgency = 1.0 + 2.0 * (missing / float(max_hp))
+        score += min(st.heal, missing) * SUSTAIN_WEIGHT * urgency
     score += st.damage_active / max(1, st.energy_cost) * 2.0
     score += st.block_active * 0.5 + st.block_per_turn * 1.5
     score += st.max_hp_gain * 2.0

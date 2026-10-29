@@ -30,8 +30,8 @@ sys.path.insert(0, str(HERE.parent / "adapter"))
 from client import Bridge, BridgeError  # noqa: E402
 from ledger import Ledger  # noqa: E402
 from itemdb import ItemDB  # noqa: E402
-from policy import (Flags, choose, flags_label, pick_reward, score_action,  # noqa: E402
-                    set_flags)
+from policy import (Flags, choose, flags_label, pick_reward, reward_score,  # noqa: E402
+                    score_action, set_flags)
 from place import place_with_room  # noqa: E402
 from mapnav import RoomGraph  # noqa: E402
 
@@ -253,6 +253,8 @@ def main(argv: list[str] | None = None) -> int:
     # （4 朝向 × 所有格）-> 需要就先挪/换一件背包物品 -> 还不行就按 --make-room
     # 丢最低价值的 -> 再放。整条链的每一跳都在 ack 里留痕。
     drops_left = max(0, args.make_room)
+    loot_mode = False       # 正在「战后战利品限时挑选」里
+    loot_taken = 0          # 本段战利品已经拿了几件（配额由游戏给）
 
     def try_place(base: dict[str, Any]) -> dict[str, Any] | None:
         """尽力放一件战利品。返回最后一次 ack；None = 这件不放了。"""
@@ -262,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
             name=base.get("name", "") or "",
             ledger=ledger,
             db=itemdb,
+            # 战利品环节允许丢：背包满（free=0）时不让丢就一件都拿不到——
+            # 真机就是这么错过回血消耗品的。丢谁仍由价值表决定（别丢唯一武器/续航）。
             drops_left=drops_left,
             log=lambda s: print(f"     {s}"),
             record=record,
@@ -302,6 +306,17 @@ def main(argv: list[str] | None = None) -> int:
             enemies = st.get("enemies") or []
             ui = st.get("ui") or {}
             last_st = st
+            was_loot = loot_mode
+            loot_mode = bool(ui.get("limited_item_reorganize"))
+            if loot_mode and not was_loot:
+                loot_taken = 0
+                # 战利品值得丢 1–2 件换（配额 3 件，拿到的通常是升级）。真机：
+                # 背包 free=0 时 WARM DRINK 就在眼前却因为丢弃额度用完而拿不到。
+                # 丢谁仍由价值表 + place.py 的「比要捡的贵就不丢」兜着。
+                drops_left = max(drops_left, 3)
+                print(f"     （战后战利品：可拿 {ui.get('items_allowed_to_take')}"
+                      f"/{ui.get('total_items_allowed')} 件，地上 "
+                      f"{(st.get('backpack') or {}).get('items_loose')} 件）")
             f = (st.get("run") or {}).get("floor")
             if isinstance(f, int) and f >= 0:
                 max_floor = f if max_floor is None else max(max_floor, f)
@@ -412,6 +427,8 @@ def main(argv: list[str] | None = None) -> int:
                         explored.add(f"place:{action.get('uid', '')}")
                         steps += 1
                         continue
+                    if loot_mode and ack.get("changed"):
+                        loot_taken += 1
                 else:
                     ack = bridge.act(action, timeout_ms=20000)
                 delta = ack.get("delta") or {}
@@ -633,17 +650,51 @@ def main(argv: list[str] | None = None) -> int:
                 action = {"type": "pick_dialogue", "index": idx}
                 picked = names[idx] if isinstance(names, list) and 0 <= idx < len(names) else "?"
                 print(f"     （N 选 1 对话框，候选 {n} 个：{names}，拿第 {idx} 个 {picked}）")
+            elif (ui.get("after_battle_button") or ui.get("inventory_phase") == 8) \
+                    and not ui.get("battle_button_pressed") and not ui.get("leveling_up"):
+                # 胜利结算：真正的入口是 AfterBattleButtonPressed，不是 LevelUpButton。
+                # IL 里它才会 SpawnGoldAndMana + StartLimitedItemGetPeriod（摆 7 件战利品、
+                # 允许拿 3 件）。以前这里直接发 level_up，战利品环节整段被跳过。
+                #
+                # 注意：如果升级界面开着，AfterBattleButtonPressed 第一行就 return
+                # （`if (levelingUp) return`），所以要先让它把升级收掉、再点一次。
+                # 判定用 after_battle_button 是否还在，而不是 inventory_phase==8：
+                # 升级收完后 phase 已经回到 0，但按钮还在，这时才会开战利品。
+                action = {"type": "after_battle"}
+                print("     （胜利结算：after_battle（会开战利品环节））")
             elif "level_up" in types:
                 action = {"type": "level_up"}
+            elif ui.get("limited_item_reorganize") and (
+                    (isinstance(ui.get("items_allowed_to_take"), int)
+                     and ui.get("items_allowed_to_take") <= 0)
+                    or loot_taken >= max(1, int(ui.get("total_items_allowed") or 3))):
+                # 配额拿满了（游戏只让拿 3 件）或已经拿够：收掉限时挑选。
+                # 继续放会被 StartDrag 拒绝（IsComplete=True），白等。
+                action = {"type": "finish_item_selection"}
+                print(f"     （战利品：已拿 {loot_taken} 件，配额 "
+                      f"{ui.get('total_items_allowed')}，收尾）")
             elif any(a.get("type") == "place_item"
                      and f"place:{a.get('uid')}" not in explored for a in legal):
-                pa = next(a for a in legal if a.get("type") == "place_item"
-                          and f"place:{a.get('uid')}" not in explored)
+                _cands = [a for a in legal if a.get("type") == "place_item"
+                          and f"place:{a.get('uid')}" not in explored]
+                if loot_mode and itemdb is not None and len(_cands) > 1:
+                    # 战利品只有 3 个名额，按「拿了值不值」挑：缺血先拿续航，
+                    # 否则按输出/费用。游戏给的顺序不可靠（真机把回血消耗品排在后面）。
+                    _hp = int((st.get("player") or {}).get("hp") or 0)
+                    _max = int((st.get("player") or {}).get("max_hp") or 0)
+                    _cands.sort(key=lambda a: reward_score(str(a.get("name") or ""),
+                                                           itemdb, _hp, _max),
+                                reverse=True)
+                pa = _cands[0]
                 _sk = place_skips.get(pa.get("uid", ""), 0)
                 if _sk:
                     pa = dict(pa)
                     pa["skip"] = _sk
                 action = pa
+            elif ui.get("limited_item_reorganize"):
+                # 战利品拿完了（或再也放不下）：收掉限时挑选，别把 7 件留在地上。
+                action = {"type": "finish_item_selection"}
+                print(f"     （战利品：还能拿 {ui.get('items_allowed_to_take')} 件，收尾）")
             elif "open_chest" in types:
                 # 真 Chest 的 StartEvent 是 no-op；桥接新增的 open_chest 走 Chest.OpenChest()。
                 action = next(a for a in legal if a.get("type") == "open_chest")

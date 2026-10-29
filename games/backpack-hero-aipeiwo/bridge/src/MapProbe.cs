@@ -1041,6 +1041,28 @@ namespace BphBridge
             w.Name("dialogue_items").BeginArray();
             for (int di = 0; di < dialogueItems.Count; di++) w.Value(dialogueItems[di]);
             w.EndArray();
+
+            // 战后战利品环节：limitedItemReorganize=true 时，地上摆着
+            // totalNumOfItemsAllowedToTake 件、还能拿 numOfItemsAllowedToTake 件。
+            // loop 靠这三个值决定「先把地上的拿完，再发 finish_item_selection」。
+            bool limitedReorg = false;
+            int takeLeft = -1, takeTotal = -1;
+            bool afterBtn = false, btnPressed = false;
+            try
+            {
+                limitedReorg = gm.limitedItemReorganize;
+                takeLeft = gm.numOfItemsAllowedToTake;
+                takeTotal = gm.totalNumOfItemsAllowedToTake;
+                btnPressed = gm.buttonPressed;
+                GameObject ab = World.Field(gm, "afterBattleButton") as GameObject;
+                afterBtn = ab != null && ab.activeInHierarchy;
+            }
+            catch { }
+            w.Prop("limited_item_reorganize", limitedReorg);
+            w.Prop("items_allowed_to_take", takeLeft);
+            w.Prop("total_items_allowed", takeTotal);
+            w.Prop("after_battle_button", afterBtn);
+            w.Prop("battle_button_pressed", btnPressed);
             w.Prop("number_to_unlock", needUnlock);
             w.Prop("levelup_offered", lvlOffered);
             w.Prop("levelup_chosen", lvlChosen);

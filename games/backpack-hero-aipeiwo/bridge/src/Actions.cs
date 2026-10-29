@@ -1696,6 +1696,32 @@ namespace BphBridge
                 return;
             }
 
+            // 胜利结算的「继续」按钮：GameManager.AfterBattleButtonPressed()。
+            //
+            // 为什么必须单独一个动作：战后真正的入口是它，不是 LevelUpButton。
+            // IL 里它做四件事：结算升级（可能开升级界面）、SpawnGoldAndMana、
+            // **StartLimitedItemGetPeriod()**（摆 7 件战利品、允许拿 3 件）、
+            // GetSpecialItemsAfterBattle。以前 loop 直接发 `level_up`，等于
+            // 只点升级按钮，战利品环节整段被跳过（真机：loose 一直是 0）。
+            if (type == "after_battle")
+            {
+                GameManager gmAfter = GameManager.main;
+                if (gmAfter == null) throw new InvalidOperationException("GameManager.main is null");
+                gmAfter.AfterBattleButtonPressed();
+                return;
+            }
+
+            // 结束「战利品限时挑选」：GameManager.FinishLimitedItemSelection()。
+            // 正常等价于点「结束整理」，但只清 limitedItemReorganize / 配额 /
+            // 剩在地上的战利品，不会顺手把别的整理阶段一起收掉。
+            if (type == "finish_item_selection")
+            {
+                GameManager gmSel = GameManager.main;
+                if (gmSel == null) throw new InvalidOperationException("GameManager.main is null");
+                gmSel.FinishLimitedItemSelection();
+                return;
+            }
+
             // 开局：主菜单的按钮就是 MenuManager 的 public 方法，
             // 不用模拟鼠标（实测这个环境下鼠标点到哪儿都不可靠）
             //   via=adventure -> MenuManager.GoAdventuring()   「快速开始

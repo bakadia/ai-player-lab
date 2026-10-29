@@ -577,6 +577,38 @@ def test_drop_keeps_sustain():
     print("PASS drop keeps sustain")
 
 
+def test_bomb_priority():
+    """炸弹怪：攻击力为 0 也要优先打掉（自爆 26 血）。"""
+    from itemdb import ItemDB
+
+    db = ItemDB.load()
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("WOODEN SWORD", 7, 0)
+        items = [{"uid": "i1", "name": "WOODEN SWORD", "energy_cost": 1}]
+        st = state_with(items, enemy_hp=5)
+        # 场上还有别的敌人，保证不是「一击清场」（那会走 LETHAL_BONUS，盖住集火分）
+        st["enemies"] = [{"uid": "e1", "name": "Hermit Crab Bomb", "hp": 6, "max_hp": 6,
+                          "attacks": [{"type": 0, "power": 0}]},
+                         {"uid": "e3", "name": "Rat", "hp": 20, "max_hp": 20,
+                          "attacks": [{"type": 0, "power": 1}]}]
+        act = {"type": "use_item", "uid": "i1", "energy": 1}
+        on, why = score_action(act, st, led, set(), Flags(focus_fire=True), db)
+        off, _ = score_action(act, st, led, set(), Flags(), db)
+        assert on >= off + 25.0, (off, on, why)
+        assert "bomb" in why.lower(), why
+
+        # 普通 0 攻敌人：没有这份奖励
+        st["enemies"] = [{"uid": "e2", "name": "Rat", "hp": 6, "max_hp": 6,
+                          "attacks": [{"type": 0, "power": 0}]},
+                         {"uid": "e3", "name": "Rat", "hp": 20, "max_hp": 20,
+                          "attacks": [{"type": 0, "power": 1}]}]
+        plain, why2 = score_action(act, st, led, set(), Flags(focus_fire=True), db)
+        assert "bomb" not in why2.lower(), why2
+        assert plain < on, (plain, on)
+        print("PASS bomb priority")
+
+
 if __name__ == "__main__":
     test_ledger()
     test_policy_explore_then_known()
@@ -600,6 +632,7 @@ if __name__ == "__main__":
     test_sustain_scoring()
     test_reward_pick()
     test_drop_keeps_sustain()
+    test_bomb_priority()
 
     # 背包 planner 的自测也一起跑（纯函数，不需要游戏）
     from test_backpack import main as backpack_tests
