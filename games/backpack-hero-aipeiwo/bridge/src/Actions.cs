@@ -1518,6 +1518,14 @@ namespace BphBridge
                 return;
             }
 
+            // 通用事件入口：`DungeonEvent.Play()` +（可选）`SimpleClickItem.Click()`。
+            // 地图上的 SimpleClickItem 用 `start_event` 是空操作，只能这样收。
+            if (type == "play_event")
+            {
+                PlayEventAction(pc);
+                return;
+            }
+
             // 关地图。`GameManager` 只有 ShowMap(force)，开着的时候怎么调都不关
             // （实测 force=true/false 都是空操作），所以只能走真正的输入处理器：
             // `mapInputHandler` 是 nonpublic 字段，但 `LaunchCustomEvent()` 是 public。
@@ -3208,6 +3216,92 @@ namespace BphBridge
             if (im == null) return 0;
             try { return ((int)Mathf.Round(im.transform.eulerAngles.z) % 360 + 360) % 360; }
             catch { return 0; }
+        }
+
+        /// <summary>
+        /// 触发当前房间的事件（通用入口）。`Chest` 有自己的 `open_chest`，这个主要是给
+        /// **SimpleClickItem**（地图上摆着的东西）用的：`start_event` 对它是一个空操作，
+        /// 真正要做的是 `DungeonEvent.Play()`（实例化 `itemsToSpawn`）再
+        /// `SimpleClickItem.Click()`（把东西收走）。
+        ///
+        /// `click=false` 只 Play 不点，用来分两步调试（Play 出来的对象 Start() 还没跑过时
+        /// Click 可能被 `isOpen`/`travelling` 挡）。
+        /// </summary>
+        private static void PlayEventAction(PendingCommand pc)
+        {
+            string uid = MiniJson.Str(pc.Action, "uid", "");
+            DungeonEvent ev = null;
+            if (uid.Length > 0)
+            {
+                List<DungeonEvent> all = null;
+                try { all = DungeonEvent.FindAllDungeonEvents(); } catch { }
+                if (all == null) { try { all = DungeonEvent.dungeonEvents; } catch { } }
+                for (int i = 0; all != null && i < all.Count; i++)
+                {
+                    if (all[i] == null) continue;
+                    if ("d" + ObjId(all[i]) == uid) { ev = all[i]; break; }
+                }
+                if (ev == null) throw new InvalidOperationException("event not found: " + uid);
+            }
+            else
+            {
+                DungeonRoom room = CurrentRoom();
+                List<DungeonEvent> evs = EventsInRoom(room);
+                for (int i = 0; i < evs.Count; i++)
+                {
+                    if (evs[i] == null || EventFinished(evs[i])) continue;
+                    ev = evs[i];
+                    break;
+                }
+                if (ev == null)
+                    throw new InvalidOperationException("no unfinished event in the current room");
+            }
+
+            bool click = MiniJson.Bool(pc.Action, "click", true);
+            bool openBefore = EventOpenProp(ev);
+            int looseBefore = World.CountLoose();
+            int inGridBefore = World.CountInGrid();
+            // `Play()` 和 `open_chest` 里一样：`open` 属性存在时它可能不生成东西
+            if (openBefore) World.CallPrivateEnum(ev, "RemoveEventProperty", 6);
+
+            World.CallPrivate(ev, "Play", null);
+
+            int spawned = 0;
+            bool clicked = false;
+            try
+            {
+                UnityEngine.Object[] objs = UnityEngine.Object.FindObjectsOfType(typeof(SimpleClickItem));
+                for (int i = 0; objs != null && i < objs.Length; i++)
+                {
+                    SimpleClickItem sci = objs[i] as SimpleClickItem;
+                    if (sci == null) continue;
+                    DungeonEvent owner = World.Field(sci, "dungeonEvent") as DungeonEvent;
+                    if (owner != ev) continue;
+                    spawned++;
+                    if (click && !clicked)
+                    {
+                        try { sci.Click(); clicked = true; } catch { }
+                    }
+                }
+            }
+            catch { }
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("action", "play_event");
+            w.Prop("event", "d" + ObjId(ev));
+            w.Prop("type", EventType(ev));
+            w.Prop("open_before", openBefore);
+            w.Prop("items_to_spawn", EventItemsToSpawn(ev));
+            w.Prop("spawned_click_items", spawned);
+            w.Prop("clicked", clicked);
+            w.Prop("loose_before", looseBefore);
+            w.Prop("loose_after", World.CountLoose());
+            w.Prop("in_grid_before", inGridBefore);
+            w.Prop("in_grid_after", World.CountInGrid());
+            w.Prop("free_squares", CountFreeSquares());
+            w.EndObject();
+            pc.DiagJson = w.ToString();
         }
 
         private static void DiagEventAction(PendingCommand pc)

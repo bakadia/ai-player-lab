@@ -31,6 +31,7 @@ from client import Bridge, BridgeError  # noqa: E402
 from ledger import Ledger  # noqa: E402
 from policy import Flags, choose, flags_label, score_action, set_flags  # noqa: E402
 from place import place_with_room  # noqa: E402
+from mapnav import RoomGraph  # noqa: E402
 
 MAX_CONSECUTIVE_NOCHANGE = 4
 MAX_LEVEL_ATTEMPTS = 12  # 同一次升级最多试几次（扩容要 grant+逐格点+收尾，步数变多了）
@@ -180,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     tried_rooms: set[str] = set()
     blocked_events: set[str] = set()   # 确认做不了的事件（地图开着时的 start_event）
     bad_rooms: set[str] = set()        # legal 里有、但 move_to_room 实际走不到的房间
+    bad_edges: set[tuple[str, str]] = set()   # 房间图上「看着通、实测走不通」的边
+    move_from = ""                     # 上一次 move_to_room 是从哪个房间出发的
     place_skips: dict[str, int] = {}   # place_item 失败后换候选格的重试计数
     close_map_tries = 0                # 同一次「地图开着」里试过几次 close_map
     arrivals: dict[str, int] = {}      # 每个房间到过几次（用来终结「两房间来回走」）
@@ -280,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
                         tried_rooms.clear()
                         blocked_events.clear()
                         bad_rooms.clear()
+                        bad_edges.clear()
+                        arrivals.clear()
                         place_skips.clear()
                         level_attempt = 0
                         nochange_streak = 0
@@ -447,6 +452,8 @@ def main(argv: list[str] | None = None) -> int:
                                 tried_rooms.clear()
                                 blocked_events.clear()
                                 bad_rooms.clear()
+                                bad_edges.clear()
+                                arrivals.clear()
                                 place_skips.clear()
                                 level_attempt = 0
                                 nochange_streak = 0
@@ -585,20 +592,25 @@ def main(argv: list[str] | None = None) -> int:
                 action = {"type": "open_map"}
             else:
                 # 挑房间：按事件优先级，其次按「没去过的」。
-                # **只能从 legal 里的 move_to_room 挑**：地图上有房间是不连通的
-                # （不同 zone / 得走门），对它们发 move_to_room 会一路超时
-                # （实测 30 秒 × 4 次就被判卡死）。
+                # **可达性用房间图算**（`agent/mapnav.py`）：`legal` 会把走不到的房间
+                # 也列出来，对它发 move_to_room 只会 30 秒超时（真机踩过两次）。
+                # 房间图来自 `map.rooms` 的 pos/doors/blocked，比 legal 可靠。
+                graph = RoomGraph.from_state(st, bad_edges)
+                cur = ((st.get("map") or {}).get("player") or {}).get("room_at") or ""
+                # 可达性用全图算（新楼层一开始大部分房间是「迷雾」，但 doors 数据是全的）；
+                # 真正能不能点由 legal 决定，见下面的 first_step。
+                reach = graph.reachable(cur, allow_invisible=True)
+                legal_rooms = {a.get("room") for a in legal
+                               if a.get("type") == "move_to_room"}
                 moves = [a for a in legal if a.get("type") == "move_to_room"
-                         and a.get("room") not in bad_rooms]
-                reachable = {a.get("room") for a in moves}
+                         and a.get("room") in reach and a.get("room") not in bad_rooms]
                 # 到过两次的房间，它的事件就别再追了——否则「A 的事件开不了 → 去 B →
                 # B 也开不了 → 回 A」会无限来回走（真机实测）。
                 for _p, _room, _ev in _event_rooms(st, blocked_events):
                     if arrivals.get(_room, 0) >= 2 and _ev not in blocked_events:
                         blocked_events.add(_ev)
                         print(f"     （{_room} 到过两次事件还没完成，拉黑 {_ev}）")
-                cands = [c for c in _event_rooms(st, blocked_events) if c[1] in reachable]
-                cur = (st.get("map") or {}).get("player", {}).get("room_at")
+                cands = [c for c in _event_rooms(st, blocked_events) if c[1] in reach]
                 pick = None
                 for prio, room_uid, ev_uid in cands:
                     if room_uid == cur:
@@ -618,10 +630,26 @@ def main(argv: list[str] | None = None) -> int:
                         pick = moves[0].get("room")
 
                 if pick is None:
+                    # 图上可达但 legal 里没有（或全去过）：至少别站着不动
+                    if reach - {cur}:
+                        print(f"     （图上有 {len(reach) - 1} 间可达，但 legal 里没有可走的；等等看）")
                     print("没有可去的房间，结束")
                     break
+
+                # 一次只走一格：整层 19 间的时候，直接点远处房间会被判定「走不到」。
+                # 迷雾里的下一格点不了时，first_step 会挑一个「能点到的邻居」先探过去。
+                hop = graph.first_step(cur, pick, legal_rooms)
+                if hop is None:
+                    # 理论上不会发生（pick 在 reach 里）；防御一下，别把整局拖死
+                    bad_rooms.add(pick)
+                    print(f"     （当前没有能点到、又朝着 {pick} 的房间，跳过）")
+                    continue
                 tried_rooms.add(pick)
-                action = {"type": "move_to_room", "room": pick, "via": "room"}
+                move_from = cur
+                action = {"type": "move_to_room", "room": hop, "via": "room"}
+                if hop != pick:
+                    path_len = len(graph.path(cur, pick, allow_invisible=True) or [])
+                    print(f"     （去 {pick}：先走到 {hop}，共 {max(0, path_len - 1)} 步）")
 
             print(f"  -> {action.get('type')} {action.get('room', action.get('uid', ''))}")
             record({"event": "map", "seq": st.get("seq"), "action": action})
@@ -647,9 +675,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"     error={ack['error']}")
 
             # 游戏会把「实际走不到」的房间也列进 legal，对它发 move_to_room 只会
-            # 30 秒超时。记住这个房间，本局别再选它（否则一次就能耗掉 2 分钟）。
+            # 30 秒超时。现在正常路径由房间图保证（见上），这里只是兜底：
+            # 记住这条「图说有路、实际走不通」的边，下次 BFS 绕开它。
             if action.get("type") == "move_to_room" and not ack.get("changed"):
                 bad_rooms.add(action.get("room"))
+                if move_from:
+                    bad_edges.add((move_from, action.get("room")))
+                    print(f"     （{move_from} -> {action.get('room')} 图上有边但走不通，"
+                          f"记一条坏边）")
             if action.get("type") == "move_to_room" and ack.get("changed"):
                 _arr = action.get("room")
                 arrivals[_arr] = arrivals.get(_arr, 0) + 1

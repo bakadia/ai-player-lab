@@ -1,0 +1,822 @@
+{
+ "schema": "bph.state.v1",
+ "seq": 533,
+ "ts": 1793251664138,
+ "scene": "Game",
+ "mode": "map",
+ "battle_phase": 0,
+ "inventory_phase": 1,
+ "run": {
+  "floor": 1,
+  "turn": 4,
+  "gold": 5,
+  "level": 1,
+  "hero": "Purse"
+ },
+ "player": {
+  "hp": 13,
+  "max_hp": 40,
+  "block": 0,
+  "energy": 0,
+  "max_energy": 3
+ },
+ "enemies": [],
+ "backpack": {
+  "items_total": 3,
+  "items_placed": 3,
+  "items_in_grid": 3,
+  "items_loose": 0,
+  "grid_squares": 9,
+  "free_squares": 0,
+  "items": [
+   {
+    "uid": "i-9110",
+    "name": "ROUGH BUCKLER",
+    "cost": -999,
+    "energy_cost": 1,
+    "costs": {
+     "energy": 1,
+     "mana": 0,
+     "gold": 0
+    },
+    "usable": false,
+    "is_relic": false,
+    "can_be_used_active": -1,
+    "reason": "not_player_turn",
+    "charges": 0,
+    "max_charges": -999,
+    "play_type": 0,
+    "text": "",
+    "parent": "Grid Parent",
+    "last_parent": "Grid Parent",
+    "cells": [
+     "-1,0",
+     "-1,1",
+     "0,0",
+     "0,1"
+    ]
+   },
+   {
+    "uid": "i-9068",
+    "name": "WOODEN SWORD",
+    "cost": -999,
+    "energy_cost": 1,
+    "costs": {
+     "energy": 1,
+     "mana": 0,
+     "gold": 0
+    },
+    "usable": false,
+    "is_relic": false,
+    "can_be_used_active": -1,
+    "reason": "not_player_turn",
+    "charges": 0,
+    "max_charges": -999,
+    "play_type": 0,
+    "text": "",
+    "parent": "Grid Parent",
+    "last_parent": "Grid Parent",
+    "cells": [
+     "1,-1",
+     "1,0",
+     "1,1"
+    ]
+   },
+   {
+    "uid": "i-18694",
+    "name": "MEAL",
+    "cost": -999,
+    "energy_cost": 0,
+    "costs": {
+     "energy": 0,
+     "mana": 0,
+     "gold": 0
+    },
+    "usable": false,
+    "is_relic": false,
+    "can_be_used_active": -1,
+    "reason": "not_player_turn",
+    "charges": 0,
+    "max_charges": -999,
+    "play_type": 0,
+    "text": "",
+    "parent": "Grid Parent",
+    "last_parent": "Grid Parent",
+    "cells": [
+     "-1,-1",
+     "0,-1"
+    ]
+   }
+  ],
+  "unplaced": []
+ },
+ "stats": {
+  "turn": {
+   "damage_dealt": -1,
+   "damage_taken": -1,
+   "items_used": -1
+  },
+  "combat": {
+   "damage_dealt": -1,
+   "damage_taken": -1,
+   "items_used": -1
+  }
+ },
+ "map": {
+  "active": true,
+  "detail": true,
+  "zone_number": 0,
+  "zone": 0,
+  "zone_name": "dungeon",
+  "area": "The Crypt",
+  "dungeon_floor": 2,
+  "dungeon_floor_name": "first",
+  "origin": [
+   0,
+   0.5
+  ],
+  "map_mode": 0,
+  "player": {
+   "room": "r-10122",
+   "room_at": "r-10122",
+   "room_dist": 0,
+   "event": "d-10464",
+   "moving": false,
+   "locked": false,
+   "from_locked_door": false,
+   "space": [
+    -3,
+    1
+   ],
+   "pos": [
+    -3,
+    2.5
+   ]
+  },
+  "rooms": [
+   {
+    "uid": "r-10052",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": false,
+     "up": true,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     -2,
+     3.5
+    ]
+   },
+   {
+    "uid": "r-10066",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": false,
+     "up": true,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": "d-10352",
+    "pos": [
+     -3,
+     1.5
+    ]
+   },
+   {
+    "uid": "r-10080",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": true,
+     "up": false,
+     "down": true
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     -3,
+     3.5
+    ]
+   },
+   {
+    "uid": "r-10094",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": true,
+     "up": false,
+     "down": true
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     -2,
+     4.5
+    ]
+   },
+   {
+    "uid": "r-10108",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": true,
+     "up": false,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     -1,
+     4.5
+    ]
+   },
+   {
+    "uid": "r-10122",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": false,
+     "up": true,
+     "down": true
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": "d-10464",
+    "pos": [
+     -3,
+     2.5
+    ]
+   },
+   {
+    "uid": "r-10170",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": true,
+     "up": true,
+     "down": true
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     2,
+     2.5
+    ]
+   },
+   {
+    "uid": "r-10184",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     3,
+     2.5
+    ]
+   },
+   {
+    "uid": "r-10198",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": true,
+     "up": false,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     1,
+     2.5
+    ]
+   },
+   {
+    "uid": "r-10212",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": true
+    },
+    "blocked": {
+     "left": true,
+     "right": false,
+     "up": true,
+     "down": false
+    },
+    "event": "d-10448",
+    "pos": [
+     3,
+     1.5
+    ]
+   },
+   {
+    "uid": "r-10226",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": false,
+     "up": true,
+     "down": true
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     2,
+     1.5
+    ]
+   },
+   {
+    "uid": "r-10240",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": true,
+     "up": true,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     2,
+     0.5
+    ]
+   },
+   {
+    "uid": "r-10254",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": false,
+     "up": true,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     3,
+     0.5
+    ]
+   },
+   {
+    "uid": "r-10268",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": true,
+     "up": false,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     1,
+     0.5
+    ]
+   },
+   {
+    "uid": "r-10282",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": true,
+     "up": false,
+     "down": false
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": true,
+     "down": true
+    },
+    "event": "d-10432",
+    "pos": [
+     1,
+     1.5
+    ]
+   },
+   {
+    "uid": "r-10296",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": false,
+     "up": false,
+     "down": true
+    },
+    "blocked": {
+     "left": false,
+     "right": false,
+     "up": true,
+     "down": false
+    },
+    "event": "d-10416",
+    "pos": [
+     2,
+     3.5
+    ]
+   },
+   {
+    "uid": "r-10310",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": true,
+     "right": false,
+     "up": false,
+     "down": true
+    },
+    "blocked": {
+     "left": false,
+     "right": true,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     0,
+     4.5
+    ]
+   },
+   {
+    "uid": "r-10324",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": false,
+     "up": true,
+     "down": true
+    },
+    "blocked": {
+     "left": true,
+     "right": true,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     0,
+     3.5
+    ]
+   },
+   {
+    "uid": "r-10338",
+    "is_player": false,
+    "locked": false,
+    "visible": true,
+    "doors": {
+     "left": false,
+     "right": true,
+     "up": true,
+     "down": false
+    },
+    "blocked": {
+     "left": true,
+     "right": false,
+     "up": false,
+     "down": false
+    },
+    "event": null,
+    "pos": [
+     0,
+     2.5
+    ]
+   }
+  ],
+  "rooms_total": 19,
+  "events": [
+   {
+    "uid": "d-10464",
+    "type": 11,
+    "type_name": "SimpleClickItem",
+    "finished": false,
+    "passable": true,
+    "no_walk_away": false,
+    "door_number": 0,
+    "turns_to_expire": -1,
+    "text_key": "",
+    "pos": [
+     -3,
+     2.5
+    ],
+    "props": [
+     {
+      "type": 5,
+      "name": "SimpleClickItem",
+      "value": 1
+     },
+     {
+      "type": 6,
+      "name": "open",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "uid": "d-10448",
+    "type": 11,
+    "type_name": "SimpleClickItem",
+    "finished": false,
+    "passable": true,
+    "no_walk_away": false,
+    "door_number": 0,
+    "turns_to_expire": -1,
+    "text_key": "",
+    "pos": [
+     3,
+     1.5
+    ],
+    "props": [
+     {
+      "type": 5,
+      "name": "SimpleClickItem",
+      "value": 0
+     }
+    ]
+   },
+   {
+    "uid": "d-10432",
+    "type": 4,
+    "type_name": "Chance",
+    "finished": false,
+    "passable": true,
+    "no_walk_away": false,
+    "door_number": 0,
+    "turns_to_expire": -1,
+    "text_key": "",
+    "pos": [
+     1,
+     1.5
+    ],
+    "props": []
+   },
+   {
+    "uid": "d-10416",
+    "type": 4,
+    "type_name": "Chance",
+    "finished": false,
+    "passable": true,
+    "no_walk_away": false,
+    "door_number": 0,
+    "turns_to_expire": -1,
+    "text_key": "map9",
+    "pos": [
+     2,
+     3.5
+    ],
+    "props": []
+   },
+   {
+    "uid": "d-10352",
+    "type": 6,
+    "type_name": "Exit",
+    "finished": false,
+    "passable": true,
+    "no_walk_away": false,
+    "door_number": 0,
+    "turns_to_expire": -1,
+    "text_key": "",
+    "pos": [
+     -3,
+     1.5
+    ],
+    "props": []
+   }
+  ],
+  "events_total": 5,
+  "doors": [],
+  "doors_total": 0,
+  "event_buttons": [],
+  "event_buttons_total": 0
+ },
+ "menu": {
+  "menu_manager": false,
+  "character_selector": false
+ },
+ "ui": {
+  "viewing_top": 0,
+  "viewing_top_name": "inventory",
+  "inventory_phase": 1,
+  "inventory_phase_name": "open",
+  "in_special_reorg": false,
+  "skippable_reorganization": true,
+  "player_level": 1,
+  "player_experience": 15,
+  "popups": 0,
+  "leveling_up": false,
+  "can_level_up": false,
+  "victory_items": 0,
+  "reward_items": 0,
+  "selected_item": "",
+  "current_event_type": 0,
+  "current_event_type_name": "Enemy",
+  "select_item_dialogues": 0,
+  "select_item_finished": false,
+  "dialogue_choices": -1,
+  "number_to_unlock": -1,
+  "levelup_offered": 7,
+  "levelup_chosen": 0,
+  "tutorial_sequence": 8,
+  "tutorial_sequence_name": "trulyDone",
+  "tutorial_completed": 7,
+  "tutorial_disable_leveling": false
+ },
+ "legal": [
+  {
+   "type": "start_event",
+   "event": "d-10464",
+   "event_type": 11,
+   "event_type_name": "SimpleClickItem"
+  },
+  {
+   "type": "open_map"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10052"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10066"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10080"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10094"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10108"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10170"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10184"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10198"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10212"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10226"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10240"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10254"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10268"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10282"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10296"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10310"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10324"
+  },
+  {
+   "type": "move_to_room",
+   "room": "r-10338"
+  }
+ ],
+ "counters": {
+  "enemies_alive": 0,
+  "statuses_total": 1,
+  "enemies_in_list": 0,
+  "items_in_list": 3
+ }
+}

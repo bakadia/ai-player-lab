@@ -24,8 +24,8 @@
       "block_sum": 0,
       "damage_sum": 0,
       "effects": {},
-      "energy_sum": 6,
-      "samples": 3
+      "energy_sum": 10,
+      "samples": 5
     },
     "POULTICE": {
       "block_sum": 0,
@@ -39,10 +39,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 70,
+      "block_sum": 189,
       "damage_sum": 0,
       "effects": {},
-      "samples": 10
+      "samples": 27
     },
     "SPOILED MILK": {
       "block_sum": 36,
@@ -50,9 +50,9 @@
       "samples": 2
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 207,
+      "absorbed_sum": 256,
       "block_sum": 0,
-      "damage_sum": 1530,
+      "damage_sum": 1646,
       "effects": {
         "gold": {
           "count": 1,
@@ -63,7 +63,7 @@
           "sum": 25.0
         }
       },
-      "samples": 276
+      "samples": 301
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
