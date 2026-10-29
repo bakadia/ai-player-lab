@@ -30,36 +30,73 @@
 
 修好之后同一个开局才跑到 193 步、floor 2（修之前 31 步就"卡死"在地图上）。
 
-## 2. 现在的短板清单（按证据）
+## 2. 经验 / 战斗曲线（实测一局，工具 `tools/bph_xp_curve.py`）
+
+给 state 加了 `run.experience` / `run.xp_next`（后者来自 `levelUps[level+1].xpRequired`），
+再用一个**纯读 state.json** 的采样器跟 loop 并行跑（不发命令，不抢队列）。
+
+这一局打了 **6 场**（第 6 场死）：
+
+| # | 层 | 敌人 | 掉血 | xp | 之后 |
+|---|---|---|---|---|---|
+| 1 | 1 | 2（Muskrat Brigand / Ratwolf） | 6 | **7** | map |
+| 2 | 1 | 2（Bearded Dragon / Hermit Crab Bomb） | 14 | **7** | reorganize |
+| 3 | 1 | 1（Bearded Dragon） | 2 | **6** | map |
+| 4 | 1 | 2（Sparrow Knave / Dove Deacon） | 4 | **7** | reorganize |
+| 5 | 1 | 1（Sparrow Knave） | 5 | **5** | map |
+| 6 | 2 | 3（Gremlin / Ratwolf ×2） | 4 → 0 | 0 | **dead** |
+
+**读数**：
+
+- **一场 5–7 xp**，跟敌人数量弱相关（2 敌=7、1 敌=5–6）。
+- 升级门槛：`5 / 10 / 25 / 50 …`。这一局总共拿到 **32 xp**（5 场），
+  只走到 **level 1 + 余 17/25** —— 也就是说**一局大约能升 2 级就到头**。
+- **HP 是硬约束**：40 点血，5 场共掉 **31 点**，没有任何回血手段（MEAL 只有 5）。
+  按这个速率，**第 5–6 场必死**，而第 2 级要等到再赢 4–5 场。
+- 3 敌人房是死因（第 6 场），2 敌人房掉 4–14 血，1 敌人房只掉 2–5 血。
+
+**推论**：
+
+1. **「绕开多敌人房、专挑 1 敌人房」在数学上更划算**：xp/血比高一个量级
+   （1 敌：5–6 xp / 2–5 血；2–3 敌：7 xp / 4–14 血，还可能死）。
+2. 想靠升级变强，得先把**每场掉血**压下来（集火先杀一个 / 更好的盾 / 回血），
+   而不是多打几场。
+3. 升级本身的收益也不小：第 0 级给 4 格，但**不会回血**，所以「撑到升级」才是关键。
+
+## 3. 现在的短板清单（按证据）
 
 1. **多敌人房是全灭点**：三局都死在这。`--aware-block --ratio-energy` 只是把伤害摊平，
    9→13 格 + 3–6 件物品的输出打不穿 2–3 个敌人的血线。
-2. **等级卡在 1**：`xpRequired` 是 5 / 10 / 25 …，但三局都没吃到第 2 级（10 xp）——
-   要么战斗给的经验不够（只有 4–5 点/场），要么**死得太早**。
-   这条值得单独量：一场战斗给多少 xp、一局总共能打几场。
+2. **等级卡在 1 的原因查清了**（§2）：每场 5–7 xp 是够的，问题是**血不够撑到第 3 级**。
 3. **`place_item` 的几何不一致**：`cell 1,0 -> footprint hits occupied 1,-1`，
    说明 `probe_fit` 算出来的落点和桥接实际落点差一格（collider offset）。
    现在不会把局拖死了，但会白丢战利品。
 4. **Chance / `EventNPC` 事件仍然只能拉黑**（PITFALLS E18），每层会少 1–2 个收益点。
 
-## 3. 改动清单
+## 4. 改动清单
 
 | 位置 | 改动 |
 |---|---|
 | `agent/loop.py` | `deferred_ok`：`unlock_spaces` 点了格子、`place_item` 失败，都不计入 `nochange_streak`（两处 streak 判定都改） |
 | `agent/loop.py` | （上一提交）`SimpleClickItem` 走 `play_event`；`start_event` 连续两次空操作 → `blocked_events.add` |
+| `bridge/src/StateReader.cs` | state 增加 `run.experience` / `run.xp_next`（升级曲线统计用） |
+| `tools/bph_xp_curve.py` | 新：纯读 state.json 的战斗/经验采样器（`mode` 进出 battle 判定场次，跨级也能算 xp） |
 | `agent/tests/test_v0.py` | `test_current_room_event`（房间 ↔ 事件配对） |
 
-## 4. 验证
+## 5. 验证
 
 - `test_v0.py` / `test_mapnav.py` / `run-tests.ps1` 全 ALL PASS
-- 真机三局见 §0；日志 `data/runs/baseline-run{1,2,3}.txt`、`data/runs/loop-20261029-1{70*,7*}.jsonl`
+- 真机：§0 三局（基线）+ §2 一局（经验曲线，`data/runs/xp-curve-run1.jsonl`）
+- 日志 `data/runs/baseline-run{1,2,3}.txt`、`data/runs/loop-20261029-1{70*,7*}.jsonl`
 
-## 5. 下一步（建议顺序）
+## 6. 下一步（建议顺序）
 
-1. **量经验曲线**：一局能打几场、每场给多少 xp、第 2 级要几场。这决定「主动打敌人房」
-   还是「绕开保命」——三局数据看，绕开也躲不过去，不如先把 xp 拿到。
-2. **多敌人房的输出策略**：现在打分是「单位能量收益」，多敌人时应该优先「先杀一个」
-   （减少每回合 incoming）。`--aware-block` 只算总量，没有「集火」概念。
-3. `place_item` 的落点差一格（probe 与桥接不一致）。
-4. Chance / EventNPC 随机事件 UI。
+1. **「少挨打」优先于「多打场」**：按 §2 的 xp/血比，先把每场掉血压到 2–3，
+   比多打两场更值。具体两条：
+   - **多敌人集火**：现在打分是「单位能量收益」，没有「先杀一个」的概念；
+     2–3 敌人时应该把「能一击必杀的那个」优先（每回合 incoming 立刻少一截）。
+   - **敌人房选择**：`mapnav` 的 `avoid` 目前只按「是敌人房」一刀切；
+     可以按「敌人数 / 血量」给风险分，优先 1 敌人房。
+2. `place_item` 的落点差一格（probe 与桥接不一致）。
+3. Chance / EventNPC 随机事件 UI（每层 1–2 个收益点）。
+4. 回血：只有 MEAL/PoULTICE 之类少量食物；升级不回血。值得看商店/宝箱里食物的权重。

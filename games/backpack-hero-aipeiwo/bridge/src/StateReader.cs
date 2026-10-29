@@ -37,6 +37,23 @@ namespace BphBridge
             try { string v = f(); return v == null ? "" : v; } catch { return ""; }
         }
 
+        /// <summary>
+        /// 下一级需要多少经验（`Character.levelUps[level+1].xpRequired`）。
+        /// 拿不到就 -1 —— 「经验曲线」这种统计不该因为读不到就炸整份 state。
+        /// </summary>
+        private static int XpRequiredNext(Player pl)
+        {
+            try
+            {
+                Character ch = pl.chosenCharacter;
+                if (ch == null || ch.levelUps == null) return -1;
+                int idx = pl.level + 1;
+                if (idx < 0 || idx >= ch.levelUps.Count) return -1;
+                return ch.levelUps[idx].xpRequired;
+            }
+            catch { return -1; }
+        }
+
         // ---------- 主入口 ----------
 
         /// <summary>生成完整 state 文档。seq/ts 由调用方给，便于「内容不变就不重写」。</summary>
@@ -76,6 +93,11 @@ namespace BphBridge
             w.Prop("turn", I(delegate { return gf.turnNumber; }, -1));
             w.Prop("gold", I(delegate { return gm.goldAmount; }, -1));
             w.Prop("level", I(delegate { return pl.level; }, -1));
+            // 经验/升级门槛：算「一场战斗给多少 xp、离下一级还差多少」用。
+            // `Player.experience` 是当前等级内的余量（IncrementLevel 会减掉门槛）；
+            // `xp_next` 取自角色升级表 `levelUps[level+1].xpRequired`。
+            w.Prop("experience", I(delegate { return pl.experience; }, -1));
+            w.Prop("xp_next", I(delegate { return XpRequiredNext(pl); }, -1));
             w.Prop("hero", S(delegate { return pl.characterName.ToString(); }));
             w.EndObject();
 

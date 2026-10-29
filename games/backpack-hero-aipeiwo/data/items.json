@@ -83,10 +83,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 980,
+      "block_sum": 1057,
       "damage_sum": 0,
       "effects": {},
-      "samples": 139
+      "samples": 150
     },
     "SMELT": {
       "block_sum": 0,
@@ -105,24 +105,24 @@
       "samples": 2
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 455,
+      "absorbed_sum": 477,
       "block_sum": 0,
-      "damage_sum": 2788,
+      "damage_sum": 2960,
       "effects": {
         "gold": {
           "count": 1,
           "sum": 5.0
         },
         "status:fire:player": {
-          "count": 3,
-          "sum": 5.0
+          "count": 4,
+          "sum": 6.0
         },
         "status:rage:enemy": {
           "count": 38,
           "sum": 38.0
         }
       },
-      "samples": 515
+      "samples": 545
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
