@@ -1,10 +1,11 @@
 {
   "items": {
     "ACIDIC POTION": {
+      "absorbed_sum": 12,
       "block_sum": 0,
-      "damage_sum": 21,
+      "damage_sum": 32,
       "effects": {},
-      "samples": 1
+      "samples": 2
     },
     "BLESSED HERB": {
       "block_sum": 0,
@@ -34,6 +35,12 @@
           "sum": 1.0
         }
       },
+      "samples": 1
+    },
+    "CLEAN BURN": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {},
       "samples": 1
     },
     "CLEANSING BOMB": {
@@ -90,14 +97,14 @@
     },
     "FIRE STAR": {
       "block_sum": 0,
-      "damage_sum": 4,
+      "damage_sum": 7,
       "effects": {
         "status:fire:enemy": {
-          "count": 1,
-          "sum": 3.0
+          "count": 2,
+          "sum": 6.0
         }
       },
-      "samples": 2
+      "samples": 3
     },
     "LIQUID ARMOR": {
       "block_sum": 25,
@@ -143,6 +150,33 @@
       "energy_sum": 10,
       "samples": 5
     },
+    "PANDORA'S BOX": {
+      "block_sum": 0,
+      "damage_sum": 8,
+      "effects": {
+        "items:spawned": {
+          "count": 1,
+          "sum": 1.0
+        },
+        "luck:legendary": {
+          "count": 1,
+          "sum": 5.0
+        },
+        "luck:rare": {
+          "count": 1,
+          "sum": 10.0
+        },
+        "luck:uncommon": {
+          "count": 1,
+          "sum": 20.0
+        },
+        "phase:inventory:3": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 1
+    },
     "POISON POTION": {
       "block_sum": 0,
       "damage_sum": 0,
@@ -177,10 +211,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 2415,
+      "block_sum": 2471,
       "damage_sum": 0,
       "effects": {},
-      "samples": 344
+      "samples": 352
     },
     "SHIV": {
       "block_sum": 0,
@@ -200,9 +234,15 @@
       "samples": 1
     },
     "SPOILED MILK": {
-      "block_sum": 36,
+      "block_sum": 72,
       "damage_sum": 0,
-      "samples": 2
+      "effects": {
+        "status:poison:player": {
+          "count": 2,
+          "sum": 4.0
+        }
+      },
+      "samples": 4
     },
     "STACKING STAR": {
       "block_sum": 0,
@@ -214,6 +254,12 @@
         }
       },
       "samples": 2
+    },
+    "THROWING STAR": {
+      "block_sum": 0,
+      "damage_sum": 6,
+      "effects": {},
+      "samples": 1
     },
     "TOXIC KUNAI": {
       "block_sum": 0,
@@ -242,13 +288,13 @@
       "samples": 2
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 905,
+      "absorbed_sum": 922,
       "block_sum": 0,
-      "damage_sum": 4643,
+      "damage_sum": 4876,
       "effects": {
         "gold": {
-          "count": 1,
-          "sum": 5.0
+          "count": 2,
+          "sum": 15.0
         },
         "luck:legendary": {
           "count": 1,
@@ -267,8 +313,12 @@
           "sum": 1.0
         },
         "status:fire:player": {
-          "count": 6,
-          "sum": 8.0
+          "count": 7,
+          "sum": 9.0
+        },
+        "status:poison:player": {
+          "count": 1,
+          "sum": 1.0
         },
         "status:rage:enemy": {
           "count": 70,
@@ -279,7 +329,7 @@
           "sum": 2.0
         }
       },
-      "samples": 879
+      "samples": 917
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",

@@ -264,10 +264,9 @@ def main(argv: list[str] | None = None) -> int:
             name=base.get("name", "") or "",
             ledger=ledger,
             db=itemdb,
-            # 战利品环节允许丢，但**每拿一件最多丢一件**：真机为了塞一根 2 格法杖
-            # 连丢 ELECTRIC WAND + TAI CHI RULER 两件，净亏。丢谁仍由价值表决定
-            #（别丢唯一武器/续航），要丢的比要捡的贵还会直接放弃。
-            drops_left=(1 if loot_mode else drops_left),
+            # 战利品环节允许丢，但**整段最多丢一件**：真机为了塞 2-3 格的法杖
+            # 来回丢 DUELING SWORD / DARK WAND，拿了又丢净亏。丢谁仍由价值表决定。
+            drops_left=drops_left,
             log=lambda s: print(f"     {s}"),
             record=record,
         )
@@ -314,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
                 # 战利品值得丢 1–2 件换（配额 3 件，拿到的通常是升级）。真机：
                 # 背包 free=0 时 WARM DRINK 就在眼前却因为丢弃额度用完而拿不到。
                 # 丢谁仍由价值表 + place.py 的「比要捡的贵就不丢」兜着。
-                drops_left = max(drops_left, 3)
+                drops_left = 1
                 print(f"     （战后战利品：可拿 {ui.get('items_allowed_to_take')}"
                       f"/{ui.get('total_items_allowed')} 件，地上 "
                       f"{(st.get('backpack') or {}).get('items_loose')} 件）")
@@ -517,6 +516,19 @@ def main(argv: list[str] | None = None) -> int:
                         ui_now = st.get("ui") or {}
                         print(f"     整理收尾没生效（第 {reorg_fails} 次，"
                               f"in_special_reorg={ui_now.get('in_special_reorg')}）")
+                        if ui_now.get("in_special_reorg"):
+                            # 特殊整理（污染/诅咒）：游戏要你把 reorgnizeItem 拖进包，
+                            # 拖不动时 FinishReorganizeButton 永远 no-op。跳过按钮
+                            # （SkipReorganizeButton）实测能直接退出这个阶段，代价是
+                            # 那件特殊道具留在原地——比整局卡死好。
+                            ack3 = bridge.act({"type": "skip_reorganize"}, timeout_ms=15000)
+                            record({"event": "reorg_skip", "fails": reorg_fails,
+                                    "ok": ack3.get("ok"), "changed": ack3.get("changed"),
+                                    "error": ack3.get("error")})
+                            print(f"     特殊整理：改发 skip_reorganize -> "
+                                  f"ok={ack3.get('ok')} changed={ack3.get('changed')}")
+                            if ack3.get("changed"):
+                                reorg_fails = 0
                         if (reorg_fails >= 2 and args.auto_retry
                                 and retries < args.max_retries):
                             retries += 1
@@ -683,9 +695,15 @@ def main(argv: list[str] | None = None) -> int:
                     # 否则按输出/费用。游戏给的顺序不可靠（真机把回血消耗品排在后面）。
                     _hp = int((st.get("player") or {}).get("hp") or 0)
                     _max = int((st.get("player") or {}).get("max_hp") or 0)
-                    _cands.sort(key=lambda a: reward_score(str(a.get("name") or ""),
-                                                           itemdb, _hp, _max),
-                                reverse=True)
+                    _free = int((st.get("backpack") or {}).get("free_squares") or 0)
+
+                    def _loot_key(a: dict[str, Any]) -> tuple[int, float]:
+                        _st = itemdb.get(str(a.get("name") or ""))
+                        _fits = 1 if (_st is not None and 0 < _st.cells <= _free) else 0
+                        return (_fits, reward_score(str(a.get("name") or ""),
+                                                    itemdb, _hp, _max))
+
+                    _cands.sort(key=_loot_key, reverse=True)
                 pa = _cands[0]
                 _sk = place_skips.get(pa.get("uid", ""), 0)
                 if _sk:
