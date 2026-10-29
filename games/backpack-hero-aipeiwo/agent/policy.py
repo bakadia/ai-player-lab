@@ -83,6 +83,15 @@ SURVIVAL_PRIOR = 40.0
 # 一点能量值多少分。只在背包里没有任何已知攻击物品时当兜底。
 ENERGY_VALUE_DEFAULT = 6.0
 
+# 集火：杀掉一个敌人 = 它之后每回合的伤害都没了。
+# 但 `use_item` 不能指定目标（`legal` 里没有 target 参数，游戏自己选），
+# 所以这里只能按「这一击的伤害能不能打死某个敌人」估「能省下多少」：
+#   kill_value = 能被打死的那些敌人的攻击力之和 × KILL_TURNS（大约还能活几回合）
+# 2.0 是保守估计（一局一场战斗 3–6 回合），避免把「杀小怪」估得比「清场」还高。
+KILL_TURNS = 2.0
+# 「这一击能不能打死某个敌人」用账本均伤判断，均伤有波动，留一点余量更稳。
+KILL_SLACK = 0.5
+
 # 结构化回执里「一个状态点 / 一点最大生命 / 一点幸运」值多少分。
 # 1.0 只是让这类物品不再恒为 0；具体值应该等更多样本再调，不要拍脑袋调大。
 STATUS_VALUE = 1.0
@@ -99,6 +108,7 @@ class Flags:
     explore_threat: bool = False
     value_energy: bool = False
     value_status: bool = False
+    focus_fire: bool = False
     explore_score: float = EXPLORE_SCORE
     survival_prior: float = SURVIVAL_PRIOR
     block_weight: float = BLOCK_WEIGHT
@@ -135,7 +145,8 @@ def flags_label(flags: Flags | None = None) -> str:
                          ("ratio_energy", f.ratio_energy),
                          ("explore_threat", f.explore_threat),
                          ("value_energy", f.value_energy),
-                         ("value_status", f.value_status)) if v]
+                         ("value_status", f.value_status),
+                         ("focus_fire", f.focus_fire)) if v]
     return "+".join(on) if on else "baseline"
 
 
@@ -276,12 +287,37 @@ def _score_parts(
         return flags.explore_score, 0.0, energy, f"{name}: explore (incoming={inc_txt})"
 
     block = ledger.estimate_block(name)
-    total_enemy_hp = sum(e.get("hp", 0) for e in _enemies(state))
+    enemies = _enemies(state)
+    total_enemy_hp = sum(e.get("hp", 0) for e in enemies)
     lethal = est >= total_enemy_hp > 0
 
     bv = _block_value(block, incoming, hp) * flags.block_weight
     value = est + bv - ENERGY_WEIGHT * energy
     why_extra = ""
+
+    # 集火（`focus_fire`）：原来的 `lethal` 只在「一击清场」时才给奖励，
+    # 2–3 个敌人的时候几乎永远不成立 —— 于是策略完全没有「先打死一个」的动机，
+    # 而每少一个敌人，每回合 incoming 就少一截（实测每场掉血 4–14，是死因）。
+    # 这里改成「这一击能打死谁，就按那些敌人的攻击力折价」。
+    kill_value = 0.0
+    if flags.focus_fire and not lethal:
+        hit = est + KILL_SLACK
+        for e in enemies:
+            ehp = e.get("hp")
+            if not isinstance(ehp, int) or ehp <= 0:
+                continue
+            if hit < ehp:
+                continue
+            threat = 0
+            for atk in e.get("attacks") or []:
+                if atk.get("type") == ATTACK and not atk.get("hidden"):
+                    p = atk.get("power")
+                    if isinstance(p, int) and p > 0:
+                        threat += p
+            kill_value += threat * KILL_TURNS
+        kill_value = min(kill_value, LETHAL_BONUS)
+        if kill_value > 0:
+            why_extra += f" kill_value={kill_value:.1f}(T={KILL_TURNS})"
 
     # 回能量的消耗品：0 伤害 0 格挡，只有把能量折成分数它才存在。
     # 只认正的净收益；负的（花掉的费用）已经由 ENERGY_WEIGHT 计过，别再扣一次。
@@ -301,7 +337,7 @@ def _score_parts(
             value += worth
             why_extra += f" effects={eff:.2f} worth={worth:+.2f}"
 
-    bonus = LETHAL_BONUS if lethal else 0.0
+    bonus = LETHAL_BONUS if lethal else kill_value
     why = (f"{name}: est_dmg={est:.2f} est_block={block:.2f} "
            f"eff_block={bv:.2f} incoming={inc_txt} hp={hp} "
            f"energy={energy:.0f} lethal={lethal}{why_extra}")

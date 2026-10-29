@@ -162,6 +162,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="把「+N 能量」折成分数，否则回能量的消耗品恒为 0 分、永远不会被用")
     ap.add_argument("--value-status", action="store_true",
                     help="用结构化回执给「状态/最大生命/幸运」类效果估值（需要新桥接）")
+    ap.add_argument("--focus-fire", action="store_true",
+                    help="集火：能一击打死某个敌人时，按它的攻击力 × KILL_TURNS 加分"
+                         "（多敌人房里减少每回合 incoming；实测每场掉血 4-14 是死因）")
     ap.add_argument("--lethal-explore", dest="explore_threat", action="store_true",
                     help=argparse.SUPPRESS)   # 旧名字，等同 --explore-threat
     ap.add_argument("--record-unverified", action="store_true",
@@ -193,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         explore_threat=args.explore_threat,
         value_energy=args.value_energy,
         value_status=args.value_status,
+        focus_fire=args.focus_fire,
     ))
     print(f"policy flags: {flags_label(flags)}")
 

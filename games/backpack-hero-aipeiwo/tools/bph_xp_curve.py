@@ -75,6 +75,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seconds", type=float, default=900)
     ap.add_argument("--interval", type=float, default=0.15)
     ap.add_argument("--out", default="")
+    ap.add_argument("--stop-on-dead", action="store_true",
+                    help="看到 mode=dead 就退出。**跑单局统计时务必加**："
+                         "否则采样器会在下一局里继续写同一个文件（真机踩过）")
     args = ap.parse_args(argv)
 
     path = Path(args.state)
@@ -140,6 +143,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"xp+{rec['xp_gain']} lv {rec['level_before']}->{rec['level_after']} "
                   f"gold {rec['gold_before']}->{rec['gold_after']}")
             battle = None
+            if args.stop_on_dead and rec["mode_after"] == "dead":
+                print("（--stop-on-dead：这一局结束了，采样退出）")
+                break
         prev = cur
 
     fh.close()

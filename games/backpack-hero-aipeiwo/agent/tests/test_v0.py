@@ -420,6 +420,51 @@ def test_current_room_event():
     print("PASS current room event")
 
 
+def test_focus_fire_rewards_killing_a_weak_enemy():
+    """集火：能打死「某个」敌人时按它的攻击力加分；打不死就不加；清场仍是 100。"""
+    from policy import Flags, score_action
+
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("Sword", 6, 0)              # 6 伤 / 1 费
+        items = [{"uid": "i1", "name": "Sword", "energy_cost": 1}]
+        act = {"type": "use_item", "uid": "i1", "energy": 1}
+
+        # 两个敌人：5 血 9 攻（这一剑 6 伤能打死）+ 30 血 3 攻
+        st = state_with(items, enemy_hp=30)
+        st["enemies"] = [
+            {"uid": "e1", "name": "Weak", "hp": 5, "max_hp": 30,
+             "attacks": [{"type": 0, "power": 9}]},
+            {"uid": "e2", "name": "Big", "hp": 30, "max_hp": 30,
+             "attacks": [{"type": 0, "power": 3}]},
+        ]
+        off, _ = score_action(act, st, led, set(), Flags())
+        on, why = score_action(act, st, led, set(), Flags(focus_fire=True))
+        assert on == off + 18.0, (off, on, why)     # 9 攻 × KILL_TURNS(2)
+        assert "kill_value=18.0" in why, why
+
+        # 打不死任何敌人：一点分都不多给
+        st2 = state_with(items, enemy_hp=40)
+        st2["enemies"] = [
+            {"uid": "e1", "name": "A", "hp": 30, "max_hp": 30,
+             "attacks": [{"type": 0, "power": 9}]},
+            {"uid": "e2", "name": "B", "hp": 30, "max_hp": 30,
+             "attacks": [{"type": 0, "power": 3}]},
+        ]
+        off2, _ = score_action(act, st2, led, set(), Flags())
+        on2, _ = score_action(act, st2, led, set(), Flags(focus_fire=True))
+        assert on2 == off2, (off2, on2)
+
+        # 一击清场仍然是 LETHAL_BONUS(100)，不会被集火的分盖过去
+        st3 = state_with(items, enemy_hp=5)
+        st3["enemies"] = [{"uid": "e1", "name": "Only", "hp": 5, "max_hp": 5,
+                           "attacks": [{"type": 0, "power": 9}]}]
+        on3, why3 = score_action(act, st3, led, set(), Flags(focus_fire=True))
+        off3, _ = score_action(act, st3, led, set(), Flags())
+        assert on3 == off3 and "lethal=True" in why3, why3
+        print("PASS focus fire")
+
+
 if __name__ == "__main__":
     test_ledger()
     test_policy_explore_then_known()
@@ -439,6 +484,7 @@ if __name__ == "__main__":
     test_ledger_absorbed()
     test_planner_actions_never_chosen_in_battle()
     test_current_room_event()
+    test_focus_fire_rewards_killing_a_weak_enemy()
 
     # 背包 planner 的自测也一起跑（纯函数，不需要游戏）
     from test_backpack import main as backpack_tests
