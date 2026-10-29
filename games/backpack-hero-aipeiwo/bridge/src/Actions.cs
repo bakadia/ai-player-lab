@@ -1444,6 +1444,13 @@ namespace BphBridge
                 return;
             }
 
+            // 只读诊断：角色升级表（每一级的 rewards[0].rewardValue 就是扩容来源）
+            if (type == "diag_levelups")
+            {
+                DiagLevelUpsAction(pc);
+                return;
+            }
+
             // 只读诊断：整层所有事件 + 它们 itemsToSpawn 的 prefab 元数据
             // （哪种 SimpleClickItem、effects 是什么 type）。不用走过去就能知道
             // 哪个事件会掉物品（type=4）、哪个只是 QuickBoost(+HP/经验/金币)。
@@ -2385,6 +2392,69 @@ namespace BphBridge
                     w.Prop("y", ev.transform.position.y);
                 }
                 catch { }
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        /// <summary>
+        /// 只读：这个角色（`Player.chosenCharacter`）的升级表。
+        ///
+        /// 为什么需要：扩容的真源头是 `Player.IncrementLevel()` 里的
+        /// `spacesSaved += levelUps[level].rewards[0].rewardValue`
+        /// （交叉引用查出来的，只有这一处加）。所以「升级能不能加格子」完全取决于
+        /// 这张表里每一级的 `rewards[0]`：`rewardType=0` 才是加格子的奖励。
+        /// </summary>
+        private static void DiagLevelUpsAction(PendingCommand pc)
+        {
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("action", "diag_levelups");
+
+            Player pl = null;
+            try { pl = Player.main; } catch { }
+            LevelUpManager lum = null;
+            try { lum = LevelUpManager.main; } catch { }
+            if (pl == null) throw new InvalidOperationException("Player.main is null");
+
+            w.Prop("level", pl.level);
+            w.Prop("experience", pl.experience);
+            if (lum != null)
+            {
+                w.Prop("spaces_saved", lum.spacesSaved);
+                w.Prop("number_to_unlock", lum.numberToUnlock);
+                w.Prop("leveling_up", lum.levelingUp);
+                w.Prop("can_level_up", lum.CanLevelUp());
+            }
+
+            Character ch = null;
+            try { ch = pl.chosenCharacter; } catch { }
+            w.Prop("character", ch == null ? "" : ch.name);
+            System.Collections.IList ups = ch == null ? null
+                : World.Field(ch, "levelUps") as System.Collections.IList;
+            w.Prop("levelups_count", ups == null ? -1 : ups.Count);
+            w.Name("levelups").BeginArray();
+            for (int i = 0; ups != null && i < ups.Count && i < 24; i++)
+            {
+                object lu = ups[i];
+                w.BeginObject();
+                w.Prop("index", i);
+                object xp = World.Field(lu, "xpRequired");
+                w.Prop("xp_required", xp == null ? -1 : Convert.ToInt32(xp));
+                System.Collections.IList rewards = World.Field(lu, "rewards") as System.Collections.IList;
+                w.Name("rewards").BeginArray();
+                for (int k = 0; rewards != null && k < rewards.Count; k++)
+                {
+                    w.BeginObject();
+                    object rt = World.Field(rewards[k], "rewardType");
+                    object rv = World.Field(rewards[k], "rewardValue");
+                    w.Prop("type", rt == null ? -1 : Convert.ToInt32(rt));
+                    w.Prop("value", rv == null ? 0 : Convert.ToInt32(rv));
+                    w.EndObject();
+                }
+                w.EndArray();
                 w.EndObject();
             }
             w.EndArray();

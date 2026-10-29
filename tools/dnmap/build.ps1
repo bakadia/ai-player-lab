@@ -54,6 +54,19 @@ Write-Host "compiling -> $exe"
     (Join-Path $root 'Dump.cs')
 if ($LASTEXITCODE -ne 0) { throw "csc failed with exit code $LASTEXITCODE" }
 
+# Xref.exe：字段/方法的交叉引用（谁读、谁写、谁调）
+$xref = Join-Path $bin 'Xref.exe'
+Write-Host "compiling -> $xref"
+& $csc /nologo /target:exe /platform:anycpu /optimize+ /langversion:5 `
+    "/out:$xref" `
+    "/r:$cecil" `
+    "/r:$(Join-Path $fw 'System.dll')" `
+    "/r:$(Join-Path $fw 'System.Core.dll')" `
+    (Join-Path $root 'Xref.cs')
+if ($LASTEXITCODE -ne 0) { throw "csc failed with exit code $LASTEXITCODE" }
+
+Copy-Item $cecil $bin -Force
+
 if ($NoRun) { return }
 
 # Dump.exe 只依赖 Mono.Cecil.dll，运行时放在同目录

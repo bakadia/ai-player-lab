@@ -411,6 +411,32 @@ APPRENTICE STAFF，`items_loose` 0→4），接着走了三格到另一个房间
 - 反过来也成立：想验证「地上物品能不能捡」，**必须**在同一个房间里量，
   别在下一格回头看 `items_loose`。
 
+## E17 · 别拿被测试钩子污染过的状态当结论（扩容「恒为 0」是误判）
+
+**怎么发现的**：连续两个班都写着「新开局 `spacesSaved` 恒为 0，升级界面只能选 0 格，
+`grant_spaces` 是测试钩子」——一直到这一班用 `Xref.exe` 反查写入点，才看到真正加格子的
+是 `Player.IncrementLevel()`：`spacesSaved += levelUps[level].rewards[0].rewardValue`，
+而 Purse 的升级表每级都是 `rewardType=0`、`rewardValue` 4/4/3/3/…。
+真机不开钩子直接升一级：`spaces_saved 0 → 4`、`number_to_unlock 4`、点 4 个
+GridExtension 收尾后 `grid 9 → 13`。
+
+**为什么坑**：早期为了让「选格子」界面动起来，用过
+`grant_spaces`（`ChangeSpaces(N)+SetupSpaces`）和把 `numberToUnlock` 反复当参数传，
+`ChangeSpaces` 是**累加**语义，配额被刷到过 256；`EndLevelUp` 又把 `numberToUnlock`
+写回 `spacesSaved`。于是之后看到的 `spacesSaved` 全是假的，真正的正常路径一次都没跑到，
+反而被记成「来源不明」。
+
+**以后怎么办**：
+
+- **写结论之前，先确认状态没被自己的钩子动过**：`diag_levelups` 现在能把
+  `level / experience / spaces_saved / number_to_unlock / leveling_up / can_level_up`
+  和整张升级表一次打出来，先看它是不是「干净」的（`spaces_saved` 不该是 256 这种数）。
+- 有了 `Xref.exe` 就别靠猜「谁写的这个字段」：`Xref <asm> <Type> <Member>` 一次列全
+  读/写/调用点（这一班的 `spacesSaved` 只有 3 个写点，1 个是真来源）。
+- 测试钩子（`grant_spaces` / `clear_spaces` / 直接改 `numberToUnlock`）用完就
+  `retry_run` 重开一局，别在污染的局里继续做验收。
+
+
 
 
 

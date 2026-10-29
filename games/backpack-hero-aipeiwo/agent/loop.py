@@ -144,12 +144,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--level-up-via", default="select", choices=["select", "spaces", "end"],
                     help="收升级界面的方式。select/spaces 都走 Select()（spaces 曾用 ChangeSpaces "
                          "加配额，会把 numberToUnlock 翻倍，已修）；end 只 EndLevelUp")
-    ap.add_argument("--unlock-spaces", type=int, default=0, metavar="N",
-                    help="升级界面里先点 N 个 GridExtension 扩背包（9->13），再结束升级；"
-                         "这条路径会把 finish_level_up 改成 via=end，避免 Select() 重复扣配额")
+    ap.add_argument("--unlock-spaces", type=int, default=-1, metavar="N",
+                    help="升级界面里点几个 GridExtension 扩背包；**默认 -1 = 自动**"
+                         "（问游戏本级给了几格，真机 2026-10-29 Purse 第 0 级给 4 格，9->13）。"
+                         "0 = 本次升级不扩格子")
     ap.add_argument("--grant-spaces", type=int, default=0, metavar="N",
-                    help="测试钩子：升级界面里先 ChangeSpaces(N)+SetupSpaces 造配额。"
-                         "新开局 numberToUnlock 恒为 0（=spacesSaved），没有它点不动格子")
+                    help="**测试钩子**（正常情况下不需要）：先 ChangeSpaces(N)+SetupSpaces 硬造配额。"
+                         "扩容其实是正常的：Player.IncrementLevel 会把本级 rewards[0].rewardValue"
+                         " 加进 spacesSaved，所以别再用这个钩子污染状态（会把 numberToUnlock 刷爆）")
     ap.add_argument("--auto-retry", action="store_true",
                     help="阵亡后调 GameManager.Retry() 再开一局（需要新桥接的 retry_run）")
     ap.add_argument("--max-retries", type=int, default=8,
@@ -188,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     arrivals: dict[str, int] = {}      # 每个房间到过几次（用来终结「两房间来回走」）
     bad_uids: dict[str, Any] = {}      # uid -> 在哪个回合里失败过（只在本回合内剔除）
     level_attempt = 0
-    unlock_left = max(0, args.unlock_spaces)   # 还要点几个 GridExtension 扩背包
+    unlock_left = args.unlock_spaces            # -1 = 自动：这次升级能点几格就点几格
     grant_left = max(0, args.grant_spaces)     # 测试钩子：还要塞多少配额
     nochange_streak = 0
     reorg_fails = 0                 # 连续多少次 finish_reorganize 没生效（E9）
@@ -510,6 +512,16 @@ def main(argv: list[str] | None = None) -> int:
                     record({"event": "level_up_stuck", "attempts": level_attempt})
                     break
                 lvia = args.level_up_via
+                if unlock_left < 0:
+                    # 自动扩容：升级界面每次给几格由游戏自己算
+                    # （`Player.IncrementLevel` 把 levelUps[level].rewards[0].rewardValue
+                    # 加进 `spacesSaved`，`LevelUp` 再把它写进 `numberToUnlock`）。
+                    # 真机 2026-10-29：Purse 第 0 级给 4 格，9 → 13。
+                    _d = (bridge.act({"type": "diag_levelups"}, timeout_ms=8000).get("diag") or {})
+                    _ntu = _d.get("number_to_unlock")
+                    unlock_left = _ntu if isinstance(_ntu, int) and _ntu > 0 else 0
+                    print(f"     （升级界面：本级可扩 {unlock_left} 格"
+                          f"（spaces_saved={_d.get('spaces_saved')}））")
                 if grant_left > 0:
                     action = {"type": "grant_spaces", "n": grant_left}
                     grant_left = 0
