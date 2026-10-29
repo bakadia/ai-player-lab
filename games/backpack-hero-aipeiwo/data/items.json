@@ -82,6 +82,12 @@
       },
       "samples": 1
     },
+    "FIRE STAR": {
+      "block_sum": 0,
+      "damage_sum": 1,
+      "effects": {},
+      "samples": 1
+    },
     "LIQUID ARMOR": {
       "block_sum": 25,
       "damage_sum": 0,
@@ -160,10 +166,16 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 2037,
+      "block_sum": 2093,
       "damage_sum": 0,
       "effects": {},
-      "samples": 290
+      "samples": 298
+    },
+    "SHIV": {
+      "block_sum": 0,
+      "damage_sum": 12,
+      "effects": {},
+      "samples": 6
     },
     "SMELT": {
       "block_sum": 0,
@@ -181,6 +193,17 @@
       "damage_sum": 0,
       "samples": 2
     },
+    "STACKING STAR": {
+      "block_sum": 0,
+      "damage_sum": 3,
+      "effects": {
+        "items:spawned": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 1
+    },
     "TOY MACHETE": {
       "block_sum": 0,
       "damage_sum": 5,
@@ -197,9 +220,9 @@
       "samples": 2
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 718,
+      "absorbed_sum": 772,
       "block_sum": 0,
-      "damage_sum": 4075,
+      "damage_sum": 4212,
       "effects": {
         "gold": {
           "count": 1,
@@ -226,11 +249,11 @@
           "sum": 8.0
         },
         "status:rage:enemy": {
-          "count": 56,
-          "sum": 56.0
+          "count": 58,
+          "sum": 58.0
         }
       },
-      "samples": 760
+      "samples": 789
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
