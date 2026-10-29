@@ -1469,6 +1469,14 @@ namespace BphBridge
                 return;
             }
 
+            // 道具普查：把道具总池（DebugItemManager.item2s）整表 dump 到文件。
+            // 只读；ack 只回 count/path/bytes/ms（整表几 MB，不能塞 ack）。
+            if (type == "dump_item_catalog")
+            {
+                ItemCatalog.Run(pc);
+                return;
+            }
+
             // 只读诊断：摆放的形状/落点。逐格打印「如果放这里会占哪些格」，
             // 用来解释 place_item 为什么挑了那个 target（旋转、collider offset 都能看见）。
             if (type == "diag_place")

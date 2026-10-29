@@ -174,13 +174,20 @@ public static class BphWin32 {
 # ---------------------------------------------------------------- dll
 
 # The game keeps the mod assembly memory-mapped (PITFALLS E2), so the file lock
-# is the ONLY reliable "is it running" probe: process enumeration can come back
-# empty from a sandboxed / different-integrity shell even while the game runs.
+# is the only reliable "is it running" probe when process enumeration is blocked.
+# BUT: Open(ReadWrite, None) also fails with UnauthorizedAccessException when the
+# shell simply lacks write rights on the Steam folder (PITFALLS E20). A denied
+# write is NOT a lock -- otherwise "bph status" claims the game is running when
+# it is not, and "bph start" refuses to deploy.
 function Test-DllLocked {
     if (-not (Test-Path $dllDst)) { return $false }
     try {
         $fs = [System.IO.File]::Open($dllDst, 'Open', 'ReadWrite', 'None')
         $fs.Close()
+        return $false
+    } catch [System.UnauthorizedAccessException] {
+        # No write permission: cannot prove a lock either way. Deploy will fail
+        # loudly if the file really is mapped; do not block start.
         return $false
     } catch {
         return $true

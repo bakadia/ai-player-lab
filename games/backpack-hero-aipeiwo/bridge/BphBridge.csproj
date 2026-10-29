@@ -34,6 +34,10 @@
       <HintPath>E:\steam\steamapps\common\Backpack Hero\Backpack Hero_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="UnityEngine.Physics2DModule">
+      <HintPath>E:\steam\steamapps\common\Backpack Hero\Backpack Hero_Data\Managed\UnityEngine.Physics2DModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="Assembly-CSharp">
       <HintPath>E:\steam\steamapps\common\Backpack Hero\Backpack Hero_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
@@ -49,6 +53,7 @@
   <ItemGroup>
     <Compile Include="src\Actions.cs" />
     <Compile Include="src\BridgeMod.cs" />
+    <Compile Include="src\ItemCatalog.cs" />
     <Compile Include="src\Json.cs" />
     <Compile Include="src\MiniJson.cs" />
     <Compile Include="src\RuntimePaths.cs" />

@@ -32,6 +32,38 @@
 - `effects` 只记「delta 看不见」的东西（状态/最大生命/幸运/物品自身状态/生成物品/整理阶段）；
   伤害和护甲不重复记。没有 `effects` 的老条目一律当「没测过」，不是「测出来是 0」。
 
+## `item-catalog.json` — 道具总池（静态目录）
+
+`tools/bph_item_catalog.py` 从游戏里 dump 出来的**全量道具清单**（903 件，2.8 MB），
+源头是 `DebugItemManager.main.item2s`（也就是 `ItemSpawner.GetAllValidItems()` 用的出生池）。
+不是实验数据，是版本快照；换游戏版本要重抓。
+
+每件道具的字段（snake_case 是给 `agent/itemdb.py` 的契约）：
+
+| 组 | 字段 |
+|---|---|
+| 身份 | `name`（prefab 名）、`display_name`、`display_name_text`（人话）、`item_type[]`、`rarity`、`one_of_a_kind`、`item_groupings[]`、`spawn_groupings[]`、`play_type` |
+| 经济 | `energy_cost` / `mana_cost` / `gold_cost`（由 `costs[]` 折算，无则 -1）、`cost` / `original_cost` / `charges`（**prefab 上是 -999 哨兵**）、`sigil_energy` |
+| 几何 | `cells`（占格数）、`grid_positions[]`、`collider_shapes[]`（w/h/ox/oy）、`move_area`、`move_distance`、`offset_of_item_shape` |
+| 效果 | `combat_effects[]` / `energy_effects[]` / `movement_effects[]` / `create_effects[]` / `modifiers[]` / `add_modifiers[]` / `active_item_status_effects[]` / `uses_limits[]` / `costs[]` —— 每项是带 `"$type"` 的原始数据对象（枚举存整数） |
+| 文本 | `descriptions[]`：`{key, text}`；833 件为空（描述是运行时按 effect 拼的） |
+| 其它 | `extra`：`Item2` 上其余 public 字段（`effectTotals` / `modifierTotals` / `isStandard` 等） |
+
+> 枚举整数去 `data/enums.json` 查。已知坑：`cost` 是 -999 哨兵（E20）、
+> `gridObject` 在 prefab 上是 null（E21）。
+
+## `enums.json` — 枚举真值表
+
+`tools/bph_item_enums.py` 用 `tools/dnmap/EnumDump.exe` 从 `Assembly-CSharp.dll`
+的元数据**常量**导出（不是按字段顺序猜的），当前 **165 个枚举**：
+
+```json
+{"schema": "bph.enums.v1", "assembly": "Assembly-CSharp",
+ "types": {"Item2+ItemType": {"Any": 0, "Grid": 1, ..., "Relic": 22, "Carving": 32}}}
+```
+
+用法：`{v: k for k, v in types["Item2+Effect+Type"].items()}` 得到 `整数 -> 名字`。
+
 ## `runs/` — 每局回放
 
 `run.py` / `loop.py` 写的 JSONL，一行一个事件（`decide` / `act` / `map` / `dead` / `retry` / `stuck` / `end`）。

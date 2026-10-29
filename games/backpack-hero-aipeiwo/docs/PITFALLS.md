@@ -481,6 +481,69 @@ GridExtension 收尾后 `grid 9 → 13`。
 - 判断标准不是「ack.changed」，而是「这一步之后我还剩不剩新东西可试」。
 - 以后再加新动作时先问一句：它的效果是**这一帧可见**的吗？不是的话就得走 `deferred_ok`。
 
+## E20 · prefab 上的 `cost` / `originalCost` / `charges` 是 **-999 哨兵**，真实费用在 `costs[]`
+
+**怎么发现的**：道具普查第一版 dump 出来，903 件**全部** `cost = -999`、`originalCost`
+871 件是 -999、`charges` 也是 -999；但游戏里木剑明明要 1 点能量、圆盾也是 1 点。
+
+**为什么**：`Item2.cost` 这类字段是**运行时/商店**用的缓存，prefab 上留的是
+「未初始化」哨兵 `-999`。真正的费用是 `costs[]` 列表：
+
+```
+Item2+Cost { type: 0=energy 1=mana 2=gold,
+             baseValue (prefab 上的值), currentValue (运行时值), originalCost, ... }
+```
+
+真机对照：`Wooden Sword` → `costs[0] = {type:0, baseValue:1}`；`Meal` → `baseValue:0`；
+`Crisis Ring` → `costs: []`（纯被动，没有任何费用）。
+
+**以后怎么办**：
+
+- 读 prefab 数据时，**先怀疑 -999**：它是「这个字段在 prefab 上没意义」的意思，不要当真值。
+- 费用一律用 `costs[]` 折算（桥接已经把 `energy_cost` / `mana_cost` / `gold_cost` 单独算好了）。
+- 同理，`charges` 的 -999 不代表「无限次」，次数要看 `usesLimits[]`
+  （`type: 0=total 1=perCombat 2=perTurn`，配 `value` / `currentValue`）。
+
+## E21 · prefab 的 `Item2.gridObject` 是 null，占格数只能从子物体的 collider 算
+
+**怎么发现的**：第一版按计划读 `item.gridObject.gridPositions.Count`，结果 903 件
+`cells = -1`（`gridObject` 全是 null）。第二版改成沿子物体找 `GridObject` /
+`BoxCollider2D`，才拿到 `1 格 588 件、2 格 178、3 格 71、4 格 65、6 格 1`。
+
+**为什么**：`GridObject` 是**组件**，`Item2.gridObject` 在 `Awake/Start` 里才赋值；
+prefab 资产上没有跑过生命周期，字段就是 null。形状真正的来源是
+`GridObject.colliders`（`BoxCollider2D` 的 `size`/`offset`），
+`GridObject.GetGridPositions()` 也是拿它按「1 格 = 1 世界单位」折出来的。
+
+**以后怎么办**：
+
+- 桥接 `dump_item_catalog` 已经做了三级回退：
+  `item.gridObject` → `GetComponentsInChildren<GridObject>(true)` →
+  `GetComponentsInChildren<BoxCollider2D>(true)`；输出里同时给
+  `cells`、`collider_shapes[]`（w/h/offset）、`grid_positions[]`。
+- 折算时注意 `GetColliderSize` 的行为：**朝向转 90° 要交换 x/y**；
+  `localScale = (-1,1,1)` 时 `GetColliderOffset` 会把 offset.x 取反。
+- 别指望 prefab 上的 `gridPositions` 有值——它和 `gridObject` 一样是运行时的。
+
+## E22 · `bph.ps1` 的 dll 占用探测在「没有写权限」的 shell 里会误报 LOCKED
+
+**怎么发现的**：游戏明明已经关掉（`Get-Process` 里没有、窗口也没了），
+`bph.cmd status` 仍然报 `dll lock : LOCKED (game running)`，`bph.cmd start` 直接拒绝部署；
+手工 `Copy-Item` 却能成功。
+
+**为什么**：`Test-DllLocked` 用的是
+`[IO.File]::Open($dll, 'Open', 'ReadWrite', 'None')`。当 shell 对 Steam 目录
+**没有写权限**（非管理员 / 受限沙箱）时，这个调用抛的是
+`UnauthorizedAccessException`，和「文件被映射占用」抛的 `IOException` 长得一样，
+于是被同一个 `catch` 当成「锁着」。
+
+**以后怎么办**：
+
+- `bph.ps1` 已改成：`catch [UnauthorizedAccessException]` 视为「探测不了」→ 不报锁；
+  真的被占用时 `Copy-Item` 会在部署那一步响亮地失败（E2 的行为），不会静默写坏。
+- 判断游戏在不在，优先看**窗口/进程**；文件锁只当辅助证据。
+- 反过来：如果 `Copy-Item` 报 `user-mapped section open`，那才是真的还开着（E2）。
+
 
 
 

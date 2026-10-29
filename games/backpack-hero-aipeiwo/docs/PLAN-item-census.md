@@ -103,7 +103,7 @@ status_inflicted[], status_self[], cells, cost, rarity, types[]
 
 ## 4. 会话内的里程碑（做完就打勾）
 
-- [ ] M1 `dump_item_catalog` 跑通，`runtime/item-catalog.json` 落盘（含枚举表）
+- [x] M1 `dump_item_catalog` 跑通，`runtime/item-catalog.json` 落盘（含枚举表）
 - [ ] M2 分类器跑通：`unknown` 占比 < 20%，账本交叉验证偏差清单出来
 - [ ] M3 `--sustain` 接进 policy + 单测（满血不浪费、濒死不乱用）
 - [ ] M4 真机 A/B 2 局，掉血/楼层有数（写进 RESULT）
@@ -117,3 +117,44 @@ status_inflicted[], status_self[], cells, cost, rarity, types[]
   `LangaugeManager`（游戏自己的错别字）。
 - ack 里别塞大 JSON；写文件 + 短 ack。
 - 抓完顺手把 `runtime/item-catalog.json` 复制一份到 `data/`，`runtime/` 是会变的。
+
+## 6. Step 1 已完成（2026-10-29，v8.21）——数据长什么样，照这个写 Step 2
+
+产物：
+
+| 文件 | 内容 |
+|---|---|
+| `runtime/item-catalog.json` / `data/item-catalog.json` | **903 件**道具，2,806,256 bytes |
+| `data/enums.json` | **165 个枚举**（真值，来自元数据常量），41 KB |
+| `bridge/src/ItemCatalog.cs` | 只读动作 `dump_item_catalog`（含通用递归 dumper） |
+| `tools/bph_item_catalog.py` | dump + 体检（数量/字段/枚举/抽样/占格/续航预览） |
+| `tools/bph_item_enums.py` | 由 `tools/dnmap/EnumDump.exe` 生成 `data/enums.json` |
+
+实测（menu 场景，`source=item2s`、`mod_count=0`、141–188 ms）：
+
+- `count = 903`，和 `DebugItemManager.item2s.Count` 一致；
+- 抽样 5 件全对：WOODEN SWORD / ROUGH BUCKLER / MEAL / DEBUFF POTION / CRISIS RING；
+- 占格分布 `1格 588 / 2格 178 / 3格 71 / 4格 65 / 6格 1`（木剑 3 格、圆盾 4 格）；
+- 453 件有 `costs[]`（有费用），其余 450 件是纯被动；
+- `effect.type` 出现 50 种，全部能在 `data/enums.json` 里查到。
+
+三处**和计划原文不一样**，Step 2 必须照实际数据写（也记进了 PITFALLS E20/E21）：
+
+1. **`cost` / `originalCost` / `charges` 在 prefab 上全是 `-999` 哨兵**。
+   真实费用看 `costs[]`；桥接已折算成 `energy_cost` / `mana_cost` / `gold_cost`
+   （没有就是 `-1`）。次数看 `uses_limits[]`。
+2. **`Item2.gridObject` 在 prefab 上是 null**，占格数是桥接从子物体
+   `BoxCollider2D` 的 `size`/`offset` 折出来的（`collider_shapes[]` 里有原始 w/h/offset）。
+3. **`descriptions[]` 833 件是空的**：物品描述是运行时按 effect 拼的。
+   有描述的那 70 件里，7 条 `GetTextByKey` 返回的是
+   `Translation not found for key ...` 兜底串，别当成真文本。
+
+捷径（Step 2 会用到）：
+
+- 通用 dumper 给每个数据对象打了 `"$type"`（`Effect` / `Modifier` / `Trigger` / `Cost` …），
+  所以 `itemdb.py` 可以**递归找 `$type == "Effect"`**，不用为每种效果写一套解析。
+- 效果的语义 = `type`（见 `Item2+Effect+Type`）+ `value` + `target`；
+  `modifiers[].trigger.trigger` 是触发时机（`onTurnStart` / `onUse` / `constant` …），
+  「每回合给护甲」就靠这一层区分。
+- 已实测的形状样例：木剑 `combat_effects[0].effect = {type:0(Damage), value:7, target:2(enemy)}`，
+  圆盾 `{type:1(Block), value:7, target:1(player)}`，苹果 `{type:2(HP), value:5}`。
