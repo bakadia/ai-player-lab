@@ -1,13 +1,12 @@
 // 动作层：cmd/*.json -> 执行 -> ack/*.json
 //
 // 这一层只做三件事，和 MVP §3.1 的约定一致：
-//   1. 读命令（runtime/cmd/{id}.json）
+//   1. 读命令（runtime/cmd/{id}.json
 //   2. 在主线程执行
 //   3. 等状态稳定后回执，带上 delta 与耗时
 //
 // 关键：**等待不能阻塞主线程**。所以整件事是个跨帧状态机，
 // 每一帧只推进一步，不 sleep。
-
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -31,7 +30,7 @@ namespace BphBridge
         public Dictionary<int, int> EnemyBlock = new Dictionary<int, int>();
 
         // ---- 地图 / 非战斗阶段 ----
-        // 没有这几项，任何地图动作都会因为「Snapshot 里没有它」被判成没变化
+        // 没有这几项，任何地图动作都会因为「Snapshot 里没有它」被判成没变
         // (changed=false -> ok=false -> run.py 判卡死)。见 SPIKE-06 §7。
         public string RoomId = "";
         public int ViewingTop = -1;
@@ -41,6 +40,12 @@ namespace BphBridge
         public int ItemsTotal = -1;
         public int ItemsPlaced = -1;
         public int ItemsInGrid = -1;
+        /// <summary>主背包格子数。扩容（unlock_spaces）只改这个，不改 items_*
+        /// 不加它的话扩容动作会被判成 changed=false。
+        public int GridSquares = -1;
+
+        /// <summary>背包布局签名（uid→cells）。move/rotate 只改这个，靠它判 changed。</summary>
+        public string BagSig = "";
         public int ItemsLoose = -1;
         public int EventCount = -1;
         public int PopupCount = -1;
@@ -239,6 +244,10 @@ namespace BphBridge
 
             s.ItemsInGrid = World.CountInGrid();
             s.ItemsLoose = World.CountLoose();
+            s.GridSquares = Actions.CountGridSquares();
+            // 布局签名：move_item / rotate_item 只改 cells，不改物品数
+            // 没有它这两个动作会被判成 changed=false
+            s.BagSig = Actions.BagSignature();
 
             try
             {
@@ -290,7 +299,7 @@ namespace BphBridge
 
         /// <summary>
         /// 到底有没有变。**判断必须走这里，不能靠 DiffJson() != "{}"**——
-        /// 早先版本 DiffJson 无条件写 "enemies":{}，导致每个动作都被判成有变化。
+        /// 早先版本 DiffJson 无条件写 "enemies":{}，导致每个动作都被判成有变化
         /// </summary>
         public bool Differs(Snapshot a)
         {
@@ -314,6 +323,8 @@ namespace BphBridge
             if (a.ItemsTotal != ItemsTotal) return true;
             if (a.ItemsPlaced != ItemsPlaced) return true;
             if (a.ItemsInGrid != ItemsInGrid) return true;
+            if (a.GridSquares != GridSquares) return true;
+            if (a.BagSig != BagSig) return true;
             if (a.ItemsLoose != ItemsLoose) return true;
             if (a.EventCount != EventCount) return true;
             if (a.PopupCount != PopupCount) return true;
@@ -421,6 +432,8 @@ namespace BphBridge
             if (after.ItemsTotal != ItemsTotal) w.Prop("items_total", after.ItemsTotal - ItemsTotal);
             if (after.ItemsPlaced != ItemsPlaced) w.Prop("items_placed", after.ItemsPlaced - ItemsPlaced);
             if (after.ItemsInGrid != ItemsInGrid) w.Prop("items_in_grid", after.ItemsInGrid - ItemsInGrid);
+            if (after.GridSquares != GridSquares) w.Prop("grid_squares", after.GridSquares - GridSquares);
+            if (after.BagSig != BagSig) w.Prop("bag_layout_changed", true);
             if (after.ItemsLoose != ItemsLoose) w.Prop("items_loose", after.ItemsLoose - ItemsLoose);
             if (after.EventCount != EventCount) w.Prop("events", after.EventCount - EventCount);
             if (after.PopupCount != PopupCount) w.Prop("popups", after.PopupCount - PopupCount);
@@ -600,6 +613,16 @@ namespace BphBridge
         public bool WaitItemsInGrid;
         public int ItemsInGridBefore = -1;
 
+        /// <summary>
+        /// place_item 的真验收：这件物品的每个 cell 都在主背包格子里，且 parent 是 Grid Parent。
+        /// 不能只看 items_in_grid——AddToGrid 在判定格子够不够之前就置 inGrid=true 了。
+        /// </summary>
+        public bool WaitInBag;
+        public string PlaceUid = "";
+
+        /// <summary>drop_item：等物品真的离开背包（ItemInBag 为 false，或已经被销毁）。</summary>
+        public bool WaitDropped;
+
         /// <summary>open_chest：等地上的战利品真的出现（宝箱可能给 0 件，但正常会变多）。</summary>
         public bool WaitLooseAbove;
         public int LooseBefore = -1;
@@ -629,6 +652,410 @@ namespace BphBridge
             return true;
         }
 
+        /// <summary>
+        /// 主背包的 parent。实测手动拖入后 `parentInventoryGrid` 是 **Grid Parent**，
+        /// 不是 `GameManager.inventoryItemsParent`（那是包外/掉落区，cells 会落在 4,2 / 10,2）。
+        /// </summary>
+        public static Transform BagParent()
+        {
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                if (all != null && all.Count > 0 && all[0] != null)
+                    return all[0].transform.parent;
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>主背包某个格子的名字（用于验收 parent）。</summary>
+        public static string BagParentName()
+        {
+            Transform t = BagParent();
+            return t == null ? "" : t.name;
+        }
+
+        /// <summary>主背包的格子坐标集合（"x,y"）。用世界坐标算 cell，和 item.gridPositions 同一套。</summary>
+        public static HashSet<string> BagCellSet()
+        {
+            HashSet<string> set = new HashSet<string>();
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                if (all == null) return set;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    GridSquare gs = all[i];
+                    if (gs == null) continue;
+                    Vector2Int c = CellOfSquare(gs);
+                    set.Add(c.x + "," + c.y);
+                }
+            }
+            catch { }
+            return set;
+        }
+
+        /// <summary>格子的 cell 坐标：优先走 GridObject.WorldToCell，和物品的 gridPositions 对齐。</summary>
+        public static Vector2Int CellOfSquare(GridSquare gs)
+        {
+            if (gs == null) return new Vector2Int(0, 0);
+            try
+            {
+                // GridSquare.gridObject 是 nonpublic（种类 dump 里能看到），只能反射。
+                GridObject go = World.Field(gs, "gridObject") as GridObject;
+                if (go != null)
+                {
+                    Vector3 p = gs.transform.position;
+                    return GridObject.WorldToCell(new Vector2(p.x, p.y));
+                }
+            }
+            catch { }
+            try
+            {
+                Vector3 lp = gs.transform.localPosition;
+                return new Vector2Int(Mathf.RoundToInt(lp.x), Mathf.RoundToInt(lp.y));
+            }
+            catch { }
+            return new Vector2Int(0, 0);
+        }
+
+        /// <summary>找主背包里指定 cell 的格子。</summary>
+        public static GridSquare BagSquareAt(Vector2Int cell)
+        {
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                if (all == null) return null;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    GridSquare gs = all[i];
+                    if (gs == null) continue;
+                    Vector2Int c = CellOfSquare(gs);
+                    if (c.x == cell.x && c.y == cell.y) return gs;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>把 "x,y" 解析成 Vector2Int（C#5：不能 out var）。</summary>
+        public static bool TryParseCell(string text, out Vector2Int cell)
+        {
+            cell = new Vector2Int(0, 0);
+            if (text == null) return false;
+            string[] parts = text.Split(',');
+            if (parts.Length != 2) return false;
+            int x;
+            int y;
+            if (!int.TryParse(parts[0].Trim(), out x)) return false;
+            if (!int.TryParse(parts[1].Trim(), out y)) return false;
+            cell = new Vector2Int(x, y);
+            return true;
+        }
+
+        /// <summary>把世界坐标换算成 cell（和 gridPositions 同一套）；算不出来就按格距取整。</summary>
+        public static Vector2Int CellOfPosition(GridObject go, Vector3 pos)
+        {
+            try { return GridObject.WorldToCell(new Vector2(pos.x, pos.y)); } catch { }
+            return new Vector2Int(Mathf.RoundToInt(pos.x), Mathf.RoundToInt(pos.y));
+        }
+
+        /// <summary>假如把物品放在这个位置，它会占哪些 cell（只读，不移动物品）。</summary>
+        public static List<Vector2Int> CellsAtPosition(GridObject go, Vector3 pos)
+        {
+            if (go == null) return null;
+            try
+            {
+                return World.CallPrivate(go, "GetGridPositionsAtPosition",
+                    new object[] { new Vector2(pos.x, pos.y) }) as List<Vector2Int>;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 预测「把物品放到 target 会占哪些格
+        ///
+        /// **不能**直接 `GetGridPositionsAtPosition(target)`：它内部 offset = itemPos - target
+        /// 再用 offset 算 grid 对齐差；物品离 target 远时预测会多算一格
+        /// （实测 WOODEN SWORD 预测 4 格、实际落 3 格，于是挑了个出界的格子）。
+        /// 这里先把 transform 挪到 target（offset=0，和 EndDrag→SnapToGrid 的条件一致）
+        /// 算完再挪回去
+        /// </summary>
+        public static List<Vector2Int> PredictCells(ItemMovement im, GridObject go, Vector3 target)
+        {
+            if (go == null || im == null) return null;
+            Vector3 saved = im.transform.position;
+            try
+            {
+                im.transform.position = target;
+                return World.CallPrivate(go, "GetGridPositionsAtPosition",
+                    new object[] { new Vector2(target.x, target.y) }) as List<Vector2Int>;
+            }
+            catch { return null; }
+            finally
+            {
+                try { im.transform.position = saved; } catch { }
+            }
+        }
+
+        /// <summary>cells -> "x,y;x,y"，给回执/诊断用。</summary>
+        public static string CellsString(List<Vector2Int> cells)
+        {
+            if (cells == null) return "";
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            for (int i = 0; i < cells.Count; i++)
+            {
+                if (sb.Length > 0) sb.Append(";");
+                sb.Append(cells[i].x).Append(",").Append(cells[i].y);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>主背包格子数（扩容前后会变）。</summary>
+        public static int CountGridSquares()
+        {
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                return all == null ? -1 : all.Count;
+            }
+            catch { return -1; }
+        }
+
+        /// <summary>
+        /// 背包布局签名：`uid:cells` 排序后拼起来
+        /// move_item / rotate_item 只改 cells、不改物品数，没有它会被判成 changed=false
+        /// </summary>
+        public static string BagSignature()
+        {
+            try
+            {
+                List<Item2> items = World.ItemsInGrid();
+                if (items == null) return "";
+                List<string> parts = new List<string>();
+                for (int i = 0; i < items.Count; i++)
+                {
+                    Item2 it = items[i];
+                    if (it == null) continue;
+                    List<string> cells = ItemCells(it);
+                    if (cells.Count == 0) continue;
+                    cells.Sort(StringComparer.Ordinal);
+                    parts.Add(it.GetInstanceID() + ":" +
+                              string.Join(",", cells.ToArray()));
+                }
+                parts.Sort(StringComparer.Ordinal);
+                return string.Join("|", parts.ToArray());
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>
+        /// 拿到物品的 GridObject，必要时现场补建。
+        ///
+        /// `Item2.gridObject` 可能是 null（例如刚 drop 过的物品），这时
+        /// `GetGridPositionsAtPosition` 全废 → 形状算不出来 → 会「盲放」到第一个空格，
+        /// 结果**叠在别的物品上**（实测 MEAL 压到 WOODEN SWORD 的格子里）。
+        /// `ItemMovement.GetGridObject()` 是 public 且会补建，这里统一走它。
+        /// </summary>
+        public static GridObject ResolveGridObject(Item2 it, ItemMovement im)
+        {
+            GridObject go = null;
+            try { go = it.gridObject; } catch { }
+            if (go != null) return go;
+            if (im != null)
+            {
+                try { im.GetGridObject(); } catch { }
+                go = World.Field(im, "gridObject") as GridObject;
+                if (go != null)
+                {
+                    try { it.gridObject = go; } catch { }
+                }
+            }
+            return go;
+        }
+
+        /// <summary>
+        /// 按 `gridPositions` 重算每个格子的 `containsItem`。
+        ///
+        /// `RemoveFromGrid` 只清 `gridPositions`，格子上的 `containsItem` 常常还是 true；
+        /// 反过来，物品刚挪到某格时，旧格子的 flag 又可能被误清。两种都会让
+        /// `free_squares` 报错（13 格那局少报 1）。这里以「所有 inGrid 且有 cells 的物品」
+        /// 为唯一事实重算一遍，place/move/rotate/drop 之后都调。
+        /// </summary>
+        public static void RefreshOccupancy()
+        {
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                if (all == null) return;
+
+                HashSet<string> used = new HashSet<string>();
+                List<Item2> items = World.ItemsInGrid();
+                if (items != null)
+                {
+                    for (int i = 0; i < items.Count; i++)
+                    {
+                        Item2 it = items[i];
+                        if (it == null) continue;
+                        if (!World.IsPlaced(it)) continue;
+                        List<string> cells = ItemCells(it);
+                        for (int c = 0; c < cells.Count; c++) used.Add(cells[c]);
+                    }
+                }
+
+                for (int i = 0; i < all.Count; i++)
+                {
+                    GridSquare gs = all[i];
+                    if (gs == null) continue;
+                    Vector2Int c = CellOfSquare(gs);
+                    gs.containsItem = used.Contains(c.x + "," + c.y);
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 按物品当前形状，找出背包里所有放得下的落点（transform 目标坐标）
+        /// `extraFree` 里的格子当作空（move_item 挪走自己时，旧格子就是这个状态）
+        /// </summary>
+        public static List<Vector3> FitTargets(ItemMovement im, GridObject go, HashSet<string> extraFree)
+        {
+            List<Vector3> outList = new List<Vector3>();
+            if (im == null) return outList;
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                if (all == null) return outList;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    GridSquare gs = all[i];
+                    if (gs == null) continue;
+                    Vector3 pos = gs.transform.position;
+                    List<Vector2Int> cells = PredictCells(im, go, pos);
+                    if (cells == null || cells.Count == 0) continue;
+                    bool fits = true;
+                    for (int c = 0; c < cells.Count; c++)
+                    {
+                        string key = cells[c].x + "," + cells[c].y;
+                        GridSquare fs = BagSquareAt(cells[c]);
+                        if (fs == null) { fits = false; break; }   // 出背
+                        if (extraFree != null && extraFree.Contains(key)) continue;
+                        if (!SquareOpen(fs)) { fits = false; break; }
+                    }
+                    if (fits) outList.Add(pos);
+                }
+            }
+            catch { }
+            return outList;
+        }
+
+        /// <summary>背包外的一个落点（丢弃物品用），保证不在任何格子上。</summary>
+        public static Vector3 DropPosition()
+        {
+            float maxX = 0f;
+            float minY = 0f;
+            bool any = false;
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                if (all != null)
+                {
+                    for (int i = 0; i < all.Count; i++)
+                    {
+                        GridSquare gs = all[i];
+                        if (gs == null) continue;
+                        Vector3 p = gs.transform.position;
+                        if (!any) { maxX = p.x; minY = p.y; any = true; }
+                        else
+                        {
+                            if (p.x > maxX) maxX = p.x;
+                            if (p.y < minY) minY = p.y;
+                        }
+                    }
+                }
+            }
+            catch { }
+            if (!any) return new Vector3(30f, -7f, 0f);
+            return new Vector3(maxX + 6f, minY - 2f, 0f);
+        }
+
+        /// <summary>主背包当前空格数。</summary>
+        public static int CountFreeSquares()
+        {
+            int free = 0;
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                if (all == null) return -1;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    if (SquareOpen(all[i])) free++;
+                }
+            }
+            catch { return -1; }
+            return free;
+        }
+
+        /// <summary>物品现在的 cells（"x,y"，按 gridPositions）。</summary>
+        public static List<string> ItemCells(Item2 it)
+        {
+            List<string> cells = new List<string>();
+            if (it == null) return cells;
+            try
+            {
+                GridObject go = it.gridObject;
+                if (go == null)
+                {
+                    // 有些物品还没跑过 Start()，Item2.gridObject 是空的；
+                    // ItemMovement 上那份（private）通常已经有了。
+                    try
+                    {
+                        ItemMovement im2 = it.GetItemMovement();
+                        if (im2 != null) go = World.Field(im2, "gridObject") as GridObject;
+                    }
+                    catch { }
+                }
+                if (go == null || go.gridPositions == null) return cells;
+                for (int i = 0; i < go.gridPositions.Count; i++)
+                {
+                    Vector2Int v = go.gridPositions[i];
+                    cells.Add(v.x + "," + v.y);
+                }
+            }
+            catch { }
+            return cells;
+        }
+
+        /// <summary>
+        /// 物品是否真的在主背包里：每个 cell 都是主背包的格子，且 parent 是 Grid Parent。
+        ///
+        /// **不要用 `items_in_grid` 当验收**：`AddToGrid` 在检查格子够不够之前就把
+        /// `inGrid=true` 了，放包外（Items 容器 4,2 / 10,2）也会 +1。见 RESULT §2.2。
+        /// </summary>
+        public static bool ItemInBag(string uid)
+        {
+            Item2 it = FindItem(uid);
+            if (it == null) return false;
+
+            List<string> cells = ItemCells(it);
+            if (cells.Count == 0) return false;
+
+            HashSet<string> bag = BagCellSet();
+            if (bag.Count == 0) return false;
+            for (int i = 0; i < cells.Count; i++)
+            {
+                if (!bag.Contains(cells[i])) return false;
+            }
+
+            Transform p = null;
+            try { p = it.parentInventoryGrid; } catch { }
+            Transform bagp = BagParent();
+            if (bagp == null) return true;
+            if (p == null) return false;
+            if (p == bagp) return true;
+            return p.name == bagp.name;
+        }
+
         /// <summary>place_item 的轮转游标：连续放多件战利品时不要都塞进第一个空格。</summary>
         private static int _placeCursor = 0;
 
@@ -648,7 +1075,7 @@ namespace BphBridge
 
                 // 整理阶段（污染/诅咒）也算「可以收尾」：实测敌人回合里掉出诅咒会
                 // 直接把 inventoryPhase 顶到 3，此时 battlePhase 还停在 3，
-                // 旧写法会干等 15 秒然后报假超时（SPIKE-06 §21）。
+                // 旧写法会干等 15 秒然后报假超时（SPIKE-06 §21）
                 GameManager gm = GameManager.main;
                 if (gm != null && (int)gm.inventoryPhase == 3) return true;
 
@@ -816,7 +1243,7 @@ namespace BphBridge
             catch (Exception ex)
             {
                 MelonLogger.Warning("[BphBridge] bad command file: " + ex.Message);
-                // 坏命令直接丢掉，别卡住队列
+                // 坏命令直接丢掉，别卡住队
                 try
                 {
                     string[] bad = Directory.GetFiles(RuntimePaths.CmdDir, "*.json");
@@ -843,7 +1270,7 @@ namespace BphBridge
             }
 
             // 整理阶段（中污染/诅咒时进入）：摆好后必须点「结束整理」才继续。
-            // GameManager 上有 finishReorganizingButton，onClick 绑的就是这个方法。
+            // GameManager 上有 finishReorganizingButton，onClick 绑的就是这个方法
             if (type == "finish_reorganize")
             {
                 GameManager gm = GameManager.main;
@@ -885,7 +1312,7 @@ namespace BphBridge
                 if (dpMove == null) throw new InvalidOperationException("DungeonPlayer.main is null");
 
                 // 实测：PathFromPlayerToRoom 单独调用**没有任何效果**（20s 超时、state 一格没动）。
-                // 玩家点房间走的是 DungeonRoom.OnPressStart -> MoveToRoom()。
+                // 玩家点房间走的是 DungeonRoom.OnPressStart -> MoveToRoom()
                 // 所以给 via 留四个口子，方便不重新部署就能试。
                 string via = MiniJson.Str(pc.Action, "via", "room");
                 if (via == "path") dpMove.PathFromPlayerToRoom(room);
@@ -914,6 +1341,64 @@ namespace BphBridge
             if (type == "diag_event")
             {
                 DiagEventAction(pc);
+                return;
+            }
+
+            // 只读诊断：摆放的形状/落点。逐格打印「如果放这里会占哪些格」，
+            // 用来解释 place_item 为什么挑了那个 target（旋转、collider offset 都能看见）。
+            if (type == "diag_place")
+            {
+                DiagPlaceAction(pc);
+                return;
+            }
+
+            // 扩容：升级界面的「加格子」入口是点 GridExtension，不是 ChangeSpaces。
+            // IL
+            //   GridExtension.Click -> levelUpManager.Select() -> ChangeSpaces(-1) + SetupSpaces()
+            //   ChangeSpaces(num) 只是 numberToUnlock += num（**累加**），
+            //   之前 via=spaces 用 numberToUnlock 当参数反复调用，把它从 1 翻到了 256。
+            if (type == "unlock_spaces")
+            {
+                UnlockSpacesAction(pc);
+                return;
+            }
+
+            // **测试钩子**：给当前升级界面塞 n 个「可加格子」配额，再跑真实 UI 流程。
+            //
+            // 为什么需要：IL 里 `<LevelUp>d__39` 对 rewardType=0/2 都是
+            // `numberToUnlock = spacesSaved`，而 spacesSaved 只在 EndLevelUp 里被赋值，
+            // 新开局恒为 0 —— 于是界面显示「选择 0 个格子」，点任何 GridExtension 都没反应。
+            // 这个动作只改配额计数（游戏自己的 ChangeSpaces），加格子仍然走
+            // GridExtension.Click 的真实路径，用来把背包从 9 扩到 13 做验收
+            // 不要拿它当正常升级流程
+            if (type == "grant_spaces")
+            {
+                GrantSpacesAction(pc);
+                return;
+            }
+
+            // 清掉「没用完的扩容配额
+            //
+            // CanLevelUp() = (xp 够 || spacesSaved > 0) && !levelingUp，
+            // 而 EndLevelUp 会把 spacesSaved 设成 numberToUnlock —— 于是没花完的配额
+            // 会让升级界面无限重开（每次还会 IncrementLevel，等级被刷高）。
+            // 扩容验收到 13 格后必须把它清零再收尾。
+            if (type == "clear_spaces")
+            {
+                LevelUpManager lumClear = LevelUpManager.main;
+                if (lumClear == null) throw new InvalidOperationException("LevelUpManager.main is null");
+                int ntuBefore = lumClear.numberToUnlock;
+                int savedBefore = lumClear.spacesSaved;
+                lumClear.numberToUnlock = 0;
+                lumClear.spacesSaved = 0;
+                JsonWriter wc = new JsonWriter();
+                wc.BeginObject();
+                wc.Prop("number_to_unlock_before", ntuBefore);
+                wc.Prop("spaces_saved_before", savedBefore);
+                wc.Prop("number_to_unlock_after", lumClear.numberToUnlock);
+                wc.Prop("spaces_saved_after", lumClear.spacesSaved);
+                wc.EndObject();
+                pc.DiagJson = wc.ToString();
                 return;
             }
 
@@ -1035,7 +1520,7 @@ namespace BphBridge
                 Door door = FindDoor(MiniJson.Str(pc.Action, "door", ""));
                 if (door == null) throw new InvalidOperationException("door not found");
                 string dvia = MiniJson.Str(pc.Action, "via", "click");
-                // ConsiderWalk / StartWalk 都是 private；public 的入口只有这三个。
+                // ConsiderWalk / StartWalk 都是 private；public 的入口只有这三个
                 if (dvia == "walk") MelonCoroutines.Start(door.WalkToDoor());
                 else if (dvia == "press") door.OnPressStart("Mouse0", true);
                 else door.OnMouseUpAsButton();
@@ -1063,12 +1548,12 @@ namespace BphBridge
             }
 
             // 开局：主菜单的按钮就是 MenuManager 的 public 方法，
-            // 不用模拟鼠标（实测这个环境下鼠标点到哪儿都不可靠）。
-            //   via=adventure -> MenuManager.GoAdventuring()   「快速开始」
-            //   via=story     -> MenuManager.StartGameButton()  「故事模式」
+            // 不用模拟鼠标（实测这个环境下鼠标点到哪儿都不可靠）
+            //   via=adventure -> MenuManager.GoAdventuring()   「快速开始
+            //   via=story     -> MenuManager.StartGameButton()  「故事模式
             //   via=continue  -> MenuManager.LoadGameAndContinueSave()
-            //   via=confirm   -> NewCharacterSelector.StartGame() 「去冒险吧」
-            //   via=auto      -> 有菜单就点快速开始，否则点去冒险吧
+            //   via=confirm   -> NewCharacterSelector.StartGame() 「去冒险吧
+            //   via=auto      -> 有菜单就点快速开始，否则点去冒险
             if (type == "start_run")
             {
                 string srVia = MiniJson.Str(pc.Action, "via", "auto");
@@ -1155,7 +1640,9 @@ namespace BphBridge
             // 注意：**只调 EndLevelUp 是不够的**——实测界面关了但 can_level_up 又变回 true，
             // 于是 agent 无限循环「点升级 → 关掉」。还得先把格子选掉：
             //   via=end（默认）  只 EndLevelUp（原样，留作对照）
-            //   via=spaces        ChangeSpaces(numberToUnlock) 再 EndLevelUp
+            //   via=spaces       等价于 select：Select() 才是「花掉一个扩容配额」，
+            //                    ChangeSpaces(+n) 是**加配额**，以前拿 numberToUnlock 当参数
+            //                    反复调用，把它从 1 翻到了 256（v8.7 真机踩到）。
             //   via=select        Select() × numberToUnlock 再 EndLevelUp
             if (type == "finish_level_up")
             {
@@ -1167,15 +1654,10 @@ namespace BphBridge
                 try { need = lumEnd.numberToUnlock; } catch { }
                 if (need <= 0) need = 1;
 
-                if (lvia == "spaces")
+                if (lvia == "spaces" || lvia == "select")
                 {
-                    int n = (int)MiniJson.Num(pc.Action, "spaces", need);
-                    if (n <= 0) n = need;
-                    lumEnd.ChangeSpaces(n);
-                }
-                else if (lvia == "select")
-                {
-                    int times = (int)MiniJson.Num(pc.Action, "times", need);
+                    int times = (int)MiniJson.Num(pc.Action,
+                        lvia == "spaces" ? "spaces" : "times", need);
                     if (times <= 0) times = need;
                     for (int i = 0; i < times; i++) lumEnd.Select();
                 }
@@ -1200,11 +1682,22 @@ namespace BphBridge
                 try { im = placeItem.GetItemMovement(); } catch { }
                 if (im == null) throw new InvalidOperationException("no ItemMovement on " + placeUid);
 
-                // 目标位置：优先按物品形状找能放下的空格（P1）。
+                // StartDrag 会把 euler.z 归整到 90° 的倍数（IL: round(z/90)*90），
+                // 但 GetColliderSize 只在 z%180==90 时交换 x/y。如果先算形状再 StartDrag，
+                // 预测和实际会差一格——实测 WOODEN SWORD 预测放得下、实际落到 -1,2（出界）。
+                // 所以先做同样的归整，后面所有格子计算才和落点一致。
+                try
+                {
+                    float z = Mathf.Round(im.transform.eulerAngles.z / 90f) * 90f;
+                    im.transform.eulerAngles = new Vector3(0f, 0f, z);
+                }
+                catch { }
+
+                // 目标位置：优先按物品形状找能放下的空格（P1）
                 // 旧行为是「第一个空格」，对 2x2 / 异形物品经常放不下；
                 // 现在用物品自己的 collider 形状算出「放到这个格子会占哪些格」，
                 // 再检查这些格子是否都空着。skip 用于失败后换下一个候选。
-                string placeVia = MiniJson.Str(pc.Action, "via", "fit");
+                string placeVia = MiniJson.Str(pc.Action, "via", "start");
                 int skip = (int)MiniJson.Num(pc.Action, "skip", 0);
                 if (skip < 0) skip = 0;
 
@@ -1231,9 +1724,12 @@ namespace BphBridge
                 }
                 catch { }
 
-                // GetGridPositionsAtPosition / WorldToCell 都是只读：只算形状，不移动物品。
-                GridObject placeGrid = null;
-                try { placeGrid = placeItem.gridObject; } catch { }
+                // GetGridPositionsAtPosition / WorldToCell 都是只读：只算形状，不移动物品
+                GridObject placeGrid = ResolveGridObject(placeItem, im);
+                // 没有 GridObject 就算不出形状。以前会退化成「盲放第一个空格」，
+                // 结果叠在别的物品上（实测 MEAL 压到 WOODEN SWORD）。宁可直接报错。
+                if (placeGrid == null && placeVia != "drag")
+                    throw new InvalidOperationException("no GridObject on " + placeUid + " (shape unknown)");
                 List<Vector3> fitTargets = new List<Vector3>();
                 if (placeGrid != null && placeVia != "drag")
                 {
@@ -1260,10 +1756,7 @@ namespace BphBridge
                         List<Vector2Int> cells = null;
                         try
                         {
-                            cells = World.CallPrivate(placeGrid, "GetGridPositionsAtPosition",
-                                new object[] {
-                                    new Vector2(gs.transform.position.x, gs.transform.position.y)
-                                }) as List<Vector2Int>;
+                            cells = PredictCells(im, placeGrid, gs.transform.position);
                         }
                         catch { }
                         if (cells == null || cells.Count == 0) continue;
@@ -1277,7 +1770,7 @@ namespace BphBridge
                     }
                 }
                 fitCount = fitTargets.Count;
-                // 连续放多件时轮转，避免都塞进第一个空格（实测 4 件全叠在 10,2）。
+                // 连续放多件时轮转，避免都塞进第一个空格（实测 4 件全叠在 10,2）
                 int pick = skip > 0 ? skip : _placeCursor++;
 
                 if (fitCount > 0)
@@ -1315,6 +1808,41 @@ namespace BphBridge
                     throw new InvalidOperationException(
                         "no fitting cell (freeGridSquares=" + freeSquares +
                         " fitShape=" + fitCount + " findGridSpaces=" + spaceCount + ")");
+
+                // 显式钉死落点：cell="0,1"（格子坐标，和 state 里的 cells 同一套）。
+                // 验收教程 3 件 / 13 格时用它，不用赌游标。
+                string wantCell = MiniJson.Str(pc.Action, "cell", "");
+                if (wantCell.Length > 0)
+                {
+                    Vector2Int wc;
+                    if (!TryParseCell(wantCell, out wc))
+                        throw new InvalidOperationException("bad cell: " + wantCell);
+                    GridSquare wgs = BagSquareAt(wc);
+                    if (wgs == null)
+                        throw new InvalidOperationException("no bag square at " + wantCell);
+                    if (!SquareOpen(wgs))
+                        throw new InvalidOperationException("cell occupied: " + wantCell);
+                    target = wgs.transform.position;
+                    hasTarget = true;
+
+                    // 异形物品：目标格空不代表整块 footprint 都空
+                    List<Vector2Int> want = PredictCells(im, placeGrid, target);
+                    if (want != null && want.Count > 0)
+                    {
+                        HashSet<string> bag = BagCellSet();
+                        for (int c = 0; c < want.Count; c++)
+                        {
+                            string key = want[c].x + "," + want[c].y;
+                            if (!bag.Contains(key))
+                                throw new InvalidOperationException(
+                                    "cell " + wantCell + " -> footprint leaves bag at " + key);
+                            GridSquare fs = BagSquareAt(want[c]);
+                            if (fs == null || !SquareOpen(fs))
+                                throw new InvalidOperationException(
+                                    "cell " + wantCell + " -> footprint hits occupied " + key);
+                        }
+                    }
+                }
 
                 if (placeVia == "look")
                 {
@@ -1356,21 +1884,19 @@ namespace BphBridge
                 }
                 else
                 {
-                    // P1：先把物品挂到持久背包的 parent 上，再走正常拖拽。
-                    // via=bag：挂在 GridSquare 自己的 parent 下（主背包），
-                    // 而不是 GameManager.inventoryItemsParent（那是包外/掉落区，
-                    // 实测会把物品放到 4,2 / 10,2，背包画面仍是空的）。
-                    Transform placeParent = null;
-                    if (placeVia == "bag")
-                    {
-                        try
-                        {
-                            List<GridSquare> gsAll = GridSquare.allGrids;
-                            if (gsAll != null && gsAll.Count > 0 && gsAll[0] != null)
-                                placeParent = gsAll[0].transform.parent;
-                        }
-                        catch { }
-                    }
+                    // P1 的落点修复（v8.7）：**EndDrag 会把 transform 拉回 startPosition**
+                    // 所以「移到目标格再 EndDrag」无效；真正要改的是 ItemMovement.startPosition。
+                    //
+                    // IL 证据（ItemMovement.StartDragWithoutChecks / EndDrag）：
+                    //   StartDrag 末尾：startRotation = transform.rotation;
+                    //                   startPosition = transform.position;
+                    //   EndDrag  开头：transform.position = startPosition;
+                    //                  transform.rotation = startRotation;
+                    //                  AddToGrid(false);   // -> SnapToGrid + 占格判定
+                    // 因此顺序必须是：StartDrag -> 移到目标 -> 改 startPosition -> EndDrag。
+                    // AddToGrid 自己会把 parentInventoryGrid 设成格子父节点（Grid Parent），
+                    // 这里先设一次只是让中途状态也正确。
+                    Transform placeParent = BagParent();
                     if (placeParent == null)
                     {
                         try
@@ -1381,10 +1907,65 @@ namespace BphBridge
                         catch { }
                     }
                     if (placeParent != null) placeItem.parentInventoryGrid = placeParent;
+
+                    // 连放两件时上一件的 isStoppingDrag 还是 true，StartDrag 会直接 return
+                    // （物品没被抬起来，startPosition 还是上一次的）。放置前清掉。
+                    World.SetField(im, "isStoppingDrag", false);
                     im.StartDrag();
+                    if (!im.isDragging)
+                        throw new InvalidOperationException(
+                            "StartDrag refused: isDragging=false (dead/phase/isStoppingDrag?)");
+
                     im.transform.position = target;
+                    Vector3 snapPos = im.transform.position;
+                    bool okPos = World.SetField(im, "startPosition", snapPos);
+                    // 朝向默认保持「抓住时」的旋转：形状是按它算的，改成 identity
+                    // 会让 2x2 / 1x3 的 footprint 和候选格对不上。rot=identity 可强制转正。
+                    Quaternion snapRot = im.transform.rotation;
+                    if (MiniJson.Str(pc.Action, "rot", "keep") == "identity")
+                    {
+                        snapRot = Quaternion.identity;
+                        im.transform.rotation = snapRot;
+                    }
+                    bool okRot = World.SetField(im, "startRotation", snapRot);
+
                     World.CallPrivate(im, "EndDrag", null);
+                    // 放完把格子占用按 gridPositions 重算一遍：消耗品留下的旧标记会少报空格。
+                    RefreshOccupancy();
+
+                    // 回执里直接写「目标格 / 落点 / parent / 空格」，验收不用去翻 state
+                    Vector2Int landed = CellOfPosition(placeGrid, target);
+                    JsonWriter dw = new JsonWriter();
+                    dw.BeginObject();
+                    dw.Prop("via", "start");
+                    dw.Prop("uid", placeUid);
+                    dw.Prop("target_cell", landed.x + "," + landed.y);
+                    dw.Prop("start_position_set", okPos);
+                    dw.Prop("start_rotation_set", okRot);
+                    dw.Name("cells");
+                    List<string> gotCells = ItemCells(placeItem);
+                    dw.BeginArray();
+                    for (int i = 0; i < gotCells.Count; i++) dw.Value(gotCells[i]);
+                    dw.EndArray();
+                    dw.Prop("parent", placeItem.parentInventoryGrid == null
+                        ? "" : placeItem.parentInventoryGrid.name);
+                    dw.Prop("in_bag", ItemInBag(placeUid));
+                    dw.Prop("free_squares", CountFreeSquares());
+                    // SnapToGrid 对「非 1 倍缩放」会转成协程（异步），放完要等一帧才准；
+                    // 把 scale 写进回执，落点异常时先看这一项。
+                    Vector3 ls = im.transform.lossyScale;
+                    dw.Prop("lossy_scale", ls.x.ToString("0.###") + "," + ls.y.ToString("0.###"));
+                    dw.EndObject();
+                    pc.DiagJson = dw.ToString();
                 }
+                return;
+            }
+
+            // 背包内移动 / 旋转 / 丢弃（P2.2 / P2.3）。
+            // 满包时先靠它们腾位，再放战利品——place_item 只能在真实空格里落子。
+            if (type == "move_item" || type == "rotate_item" || type == "drop_item")
+            {
+                MoveRotateDropAction(pc, type);
                 return;
             }
 
@@ -1577,6 +2158,450 @@ namespace BphBridge
                 w.Prop("y", c.transform.position.y);
             }
             w.EndObject();
+        }
+
+        /// <summary>
+        /// 摆放诊断（只读）：物品的 transform/collider 形状 + 每个主背包格子的
+        /// 「把 transform 放这里会占哪些格」，以及该落点是否在包内且全空
+        ///
+        /// 用来回答「为什么 place_item 选了 -1,1 却落到 -1,2」这类问题，
+        /// 不用靠猜（旋转、collider offset、GetColliderSize 的 x/y 交换都会影响）。
+        /// </summary>
+        private static void DiagPlaceAction(PendingCommand pc)
+        {
+            string uid = MiniJson.Str(pc.Action, "uid", "");
+            Item2 it = FindItem(uid);
+            if (it == null) throw new InvalidOperationException("item not found: " + uid);
+
+            ItemMovement im = null;
+            try { im = it.GetItemMovement(); } catch { }
+            GridObject go = ResolveGridObject(it, im);
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("uid", uid);
+            w.Prop("name", it.displayName == null ? "" : it.displayName);
+            w.Prop("bag_parent", BagParentName());
+            w.Prop("free_squares", CountFreeSquares());
+
+            if (im != null)
+            {
+                Vector3 p = im.transform.position;
+                Quaternion q = im.transform.rotation;
+                Vector3 s = im.transform.lossyScale;
+                w.Name("item").BeginObject();
+                w.Prop("x", p.x);
+                w.Prop("y", p.y);
+                w.Prop("euler_z", q.eulerAngles.z);
+                w.Prop("scale", s.x.ToString("0.###") + "," + s.y.ToString("0.###"));
+                w.Prop("spaces_needed", im.GetSpacesNeeded());
+                w.Prop("in_grid", im.inGrid);
+                w.Prop("is_dragging", im.isDragging);
+                w.Prop("parent", it.parentInventoryGrid == null ? "" : it.parentInventoryGrid.name);
+                w.Name("cells").BeginArray();
+                List<string> cells = ItemCells(it);
+                for (int i = 0; i < cells.Count; i++) w.Value(cells[i]);
+                w.EndArray();
+                w.EndObject();
+
+                // collider：本地位置 / 尺寸（GetColliderSize 会按旋转交换 x/y）
+                // BoxCollider2D 在 UnityEngine.Physics2DModule 里，build.ps1 不引那个程序集
+                // （直接引会 CS1070），所以按 Component + 反射读 size/offset。
+                w.Name("colliders").BeginArray();
+                try
+                {
+                    Component[] cols = im.GetComponentsInChildren<Component>();
+                    for (int i = 0; cols != null && i < cols.Length && i < 32; i++)
+                    {
+                        Component c = cols[i];
+                        if (c == null) continue;
+                        if (c.GetType().Name != "BoxCollider2D") continue;
+                        Vector2 sz = Vector2.zero;
+                        Vector2 of = Vector2.zero;
+                        object so = World.CallPrivate(c, "get_size", null);
+                        object oo = World.CallPrivate(c, "get_offset", null);
+                        if (so is Vector2) sz = (Vector2)so;
+                        if (oo is Vector2) of = (Vector2)oo;
+                        w.BeginObject();
+                        w.Prop("local_x", c.transform.localPosition.x);
+                        w.Prop("local_y", c.transform.localPosition.y);
+                        w.Prop("size_x", sz.x);
+                        w.Prop("size_y", sz.y);
+                        w.Prop("offset_x", of.x);
+                        w.Prop("offset_y", of.y);
+                        w.EndObject();
+                        if (i >= 12) break;
+                    }
+                }
+                catch { }
+                w.EndArray();
+            }
+
+            // 逐格候选：把 transform 放到这个格子中心，会占哪些 cell、是否可行
+            w.Name("candidates").BeginArray();
+            HashSet<string> bag = BagCellSet();
+            try
+            {
+                List<GridSquare> all = GridSquare.allGrids;
+                for (int i = 0; all != null && i < all.Count; i++)
+                {
+                    GridSquare gs = all[i];
+                    if (gs == null) continue;
+                    Vector2Int cell = CellOfSquare(gs);
+                    Vector3 pos = gs.transform.position;
+                    List<Vector2Int> fp = im != null
+                        ? PredictCells(im, go, pos)
+                        : CellsAtPosition(go, pos);
+                    bool inside = fp != null && fp.Count > 0;
+                    if (inside)
+                    {
+                        for (int c = 0; c < fp.Count; c++)
+                        {
+                            if (!bag.Contains(fp[c].x + "," + fp[c].y)) { inside = false; break; }
+                        }
+                    }
+                    bool allOpen = inside;
+                    if (allOpen)
+                    {
+                        for (int c = 0; c < fp.Count; c++)
+                        {
+                            GridSquare fs = BagSquareAt(fp[c]);
+                            if (fs == null || !SquareOpen(fs)) { allOpen = false; break; }
+                        }
+                    }
+                    w.BeginObject();
+                    w.Prop("cell", cell.x + "," + cell.y);
+                    w.Prop("open", SquareOpen(gs));
+                    w.Prop("footprint", CellsString(fp));
+                    w.Prop("inside_bag", inside);
+                    w.Prop("fits", allOpen);
+                    w.EndObject();
+                }
+            }
+            catch { }
+            w.EndArray();
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        /// <summary>
+        /// 测试钩子：`ChangeSpaces(n)` + `SetupSpaces()`，把升级界面的「可加格子」配额设成 n。
+        /// 只动游戏自己的计数，加格子仍由 <see cref="UnlockSpacesAction"/> 点真实 GridExtension。
+        /// </summary>
+        private static void GrantSpacesAction(PendingCommand pc)
+        {
+            LevelUpManager lum = LevelUpManager.main;
+            if (lum == null) throw new InvalidOperationException("LevelUpManager.main is null");
+
+            int n = (int)MiniJson.Num(pc.Action, "n", 1);
+            if (n <= 0) n = 1;
+
+            int before = -1;
+            try { before = lum.numberToUnlock; } catch { }
+            lum.ChangeSpaces(n);
+            World.CallPrivate(lum, "SetupSpaces", null);
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("granted", n);
+            w.Prop("number_to_unlock_before", before);
+            w.Prop("number_to_unlock_after", lum.numberToUnlock);
+            w.Prop("leveling_up", lum.levelingUp);
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        /// <summary>
+        /// 扩容：升级界面里点 n 个 GridExtension，把它们的格子并进主背包。
+        ///
+        /// 每次 Click 会 `Select()` → `ChangeSpaces(-1)` + `SetupSpaces()`：
+        /// 消耗一个 numberToUnlock，重建剩下的候选格。所以点完 n 个再 EndLevelUp。
+        /// **不要**用 ChangeSpaces(n) 传正数——那是累加配额，不是加格子。
+        /// </summary>
+        private static void UnlockSpacesAction(PendingCommand pc)
+        {
+            LevelUpManager lum = LevelUpManager.main;
+            if (lum == null) throw new InvalidOperationException("LevelUpManager.main is null");
+
+            int want = (int)MiniJson.Num(pc.Action, "n", 1);
+            if (want <= 0) want = 1;
+
+            int before = -1;
+            try { before = lum.numberToUnlock; } catch { }
+            int gridBefore = -1;
+            try { gridBefore = GridSquare.allGrids == null ? -1 : GridSquare.allGrids.Count; } catch { }
+
+            int clicked = 0;
+            // guard：万一 Click 没扣数就停，别死循环。
+            for (int guard = 0; guard < want + 8 && clicked < want; guard++)
+            {
+                int left = 0;
+                try { left = lum.numberToUnlock; } catch { break; }
+                if (left <= 0) break;
+
+                GridExtension pick = null;
+                try
+                {
+                    List<GridExtension> exts = GridExtension.gridExtensions;
+                    if (exts != null)
+                    {
+                        for (int i = 0; i < exts.Count; i++)
+                        {
+                            GridExtension e = exts[i];
+                            if (e == null || e.selected) continue;
+                            pick = e;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+                if (pick == null) break;
+
+                World.CallPrivate(pick, "Click", null);
+                clicked++;
+
+                int now = 0;
+                try { now = lum.numberToUnlock; } catch { break; }
+                if (now >= left) break;   // 没消耗配额，说明这次 Click 没生
+            }
+
+            int gridAfter = -1;
+            try { gridAfter = GridSquare.allGrids == null ? -1 : GridSquare.allGrids.Count; } catch { }
+
+            // 配额花完了就把 spacesSaved 清零：否则 EndLevelUp 会把它存回去，
+            // CanLevelUp() 永远为真，升级界面无限重开。
+            if (lum.numberToUnlock <= 0) lum.spacesSaved = 0;
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("wanted", want);
+            w.Prop("clicked", clicked);
+            w.Prop("number_to_unlock_before", before);
+            w.Prop("number_to_unlock_after", lum.numberToUnlock);
+            w.Prop("spaces_saved_after", lum.spacesSaved);
+            w.Prop("grid_squares_before", gridBefore);
+            w.Prop("grid_squares_after", gridAfter);
+            w.Prop("leveling_up", lum.levelingUp);
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        /// <summary>
+        /// 背包内移动 / 旋转 / 丢弃。
+        ///
+        /// 三个动作都先 `StartDrag()`——IL：
+        ///   `ItemMovement.Rotate()` 在 `inGrid == true` 时第一行就 return；
+        ///   `RemoveFromGrid()` 才会把 `gridPositions` 清空、`parentInventoryGrid = null`、
+        ///   `inGrid/inPouch = false`，也就是把物品从背包逻辑上摘下来
+        /// 然后和 place_item 一样：移动 transform → 改 startPosition/startRotation → EndDrag。
+        ///
+        /// - `move_item {uid, cell?}`：挪到指定格（或按形状找第一个放得下的空格）
+        /// - `rotate_item {uid, cell?, times=1}`：转 90°×times 再放
+        ///   转完放不下就回原位并报错，不会把物品丢在半空
+        /// - `drop_item {uid}`：放到背包外并纠正 `inGrid`，物品变成 loose
+        ///   （离开房间时会被游戏自己的 `DestroyAllItemsOutsideGrid` 清掉）。
+        /// </summary>
+        private static void MoveRotateDropAction(PendingCommand pc, string type)
+        {
+            string uid = MiniJson.Str(pc.Action, "uid", "");
+            Item2 it = FindItem(uid);
+            if (it == null) throw new InvalidOperationException("item not found: " + uid);
+
+            ItemMovement im = null;
+            try { im = it.GetItemMovement(); } catch { }
+            if (im == null) throw new InvalidOperationException("no ItemMovement on " + uid);
+
+            List<string> oldCells = ItemCells(it);
+            if (oldCells.Count == 0)
+                throw new InvalidOperationException("item is not in the bag: " + uid);
+
+            // 和 place_item 一样先归整朝向（StartDrag 也会这么做），
+            // 以免「预测的形状」和「落点的形状」差一格。
+            try
+            {
+                float z0 = Mathf.Round(im.transform.eulerAngles.z / 90f) * 90f;
+                im.transform.eulerAngles = new Vector3(0f, 0f, z0);
+            }
+            catch { }
+
+            if (type == "drop_item")
+            {
+                DropItemAction(pc, it, im, oldCells);
+                return;
+            }
+
+            World.SetField(im, "isStoppingDrag", false);
+            im.StartDrag();
+            if (!im.isDragging)
+                throw new InvalidOperationException(
+                    "StartDrag refused: isDragging=false (dead/phase/isStoppingDrag?)");
+
+            Quaternion beforeRot = im.transform.rotation;
+            Vector3 beforePos = im.transform.position;
+
+            int times = (int)MiniJson.Num(pc.Action, "times", 1);
+            if (times <= 0) times = 1;
+            if (type == "rotate_item")
+            {
+                im.transform.eulerAngles =
+                    new Vector3(0f, 0f, beforeRot.eulerAngles.z + 90f * times);
+            }
+
+            GridObject go = ResolveGridObject(it, im);
+            if (go == null)
+                throw new InvalidOperationException("no GridObject on " + uid + " (shape unknown)");
+
+            HashSet<string> extraFree = new HashSet<string>();
+            for (int i = 0; i < oldCells.Count; i++) extraFree.Add(oldCells[i]);
+
+            string wantCell = MiniJson.Str(pc.Action, "cell", "");
+            Vector3 target = im.transform.position;
+            bool hasTarget = false;
+            if (wantCell.Length > 0)
+            {
+                Vector2Int wc;
+                if (!TryParseCell(wantCell, out wc))
+                    throw new InvalidOperationException("bad cell: " + wantCell);
+                GridSquare wgs = BagSquareAt(wc);
+                if (wgs == null)
+                    throw new InvalidOperationException("no bag square at " + wantCell);
+                target = wgs.transform.position;
+                hasTarget = true;
+            }
+            else
+            {
+                List<Vector3> fits = FitTargets(im, go, extraFree);
+                if (fits.Count > 0)
+                {
+                    target = fits[_placeCursor++ % fits.Count];
+                    hasTarget = true;
+                }
+            }
+
+            // EndDrag 之前先验证 footprint；不合法就 EndDrag 回原位再抛错。
+            List<Vector2Int> fp = PredictCells(im, go, target);
+            string bad = null;
+            if (!hasTarget) bad = "no fitting cell";
+            else if (fp == null || fp.Count == 0) bad = "cannot compute footprint";
+            else
+            {
+                for (int i = 0; i < fp.Count; i++)
+                {
+                    string key = fp[i].x + "," + fp[i].y;
+                    GridSquare fs = BagSquareAt(fp[i]);
+                    if (fs == null) { bad = "footprint leaves bag at " + key; break; }
+                    if (extraFree.Contains(key)) continue;
+                    if (!SquareOpen(fs)) { bad = "footprint hits occupied " + key; break; }
+                }
+            }
+
+            if (bad != null)
+            {
+                // 回原位：StartDrag 已经存了 startPosition/startRotation
+                im.transform.rotation = beforeRot;
+                im.transform.position = beforePos;
+                World.CallPrivate(im, "EndDrag", null);
+                throw new InvalidOperationException(type + " aborted, item restored (" + bad + ")");
+            }
+
+            im.transform.position = target;
+            bool okPos = World.SetField(im, "startPosition", im.transform.position);
+            bool okRot = World.SetField(im, "startRotation", im.transform.rotation);
+            World.CallPrivate(im, "EndDrag", null);
+
+            // 旧格子的 containsItem 会滞后，没被别人占着就手工清
+            RefreshOccupancy();
+
+            Vector2Int landed = CellOfPosition(go, target);
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("action", type);
+            w.Prop("uid", uid);
+            w.Prop("target_cell", landed.x + "," + landed.y);
+            w.Prop("start_position_set", okPos);
+            w.Prop("start_rotation_set", okRot);
+            w.Prop("rotated", type == "rotate_item");
+            w.Name("old_cells").BeginArray();
+            for (int i = 0; i < oldCells.Count; i++) w.Value(oldCells[i]);
+            w.EndArray();
+            w.Name("cells").BeginArray();
+            List<string> got = ItemCells(it);
+            for (int i = 0; i < got.Count; i++) w.Value(got[i]);
+            w.EndArray();
+            w.Prop("parent", it.parentInventoryGrid == null ? "" : it.parentInventoryGrid.name);
+            w.Prop("in_bag", ItemInBag(uid));
+            w.Prop("free_squares", CountFreeSquares());
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        /// <summary>
+        /// 丢弃：StartDrag 摘出背包 → transform 放到背包外 → EndDrag。
+        ///
+        /// `AddToGrid` 在包外也会把 `inGrid` 置 true、`objsInGrid +1`（就是 v8.5 那个
+        /// 「放包外还报成功」的老问题），所以 EndDrag 之后按 `RemoveFromGrid` 的语义纠正：
+        /// `inGrid=false / parentInventoryGrid=null / gridPositions 清空 / objsInGrid-1`
+        /// 纠正后物品就是 loose，离开房间会被游戏清掉（等同于丢弃）。
+        /// </summary>
+        private static void DropItemAction(PendingCommand pc, Item2 it, ItemMovement im,
+                                           List<string> oldCells)
+        {
+            World.SetField(im, "isStoppingDrag", false);
+            im.StartDrag();
+            if (!im.isDragging)
+                throw new InvalidOperationException(
+                    "StartDrag refused: isDragging=false (dead/phase/isStoppingDrag?)");
+
+            Vector3 drop = DropPosition();
+            im.transform.position = drop;
+            World.SetField(im, "startPosition", im.transform.position);
+            World.SetField(im, "startRotation", im.transform.rotation);
+            World.CallPrivate(im, "EndDrag", null);
+
+            it.parentInventoryGrid = null;
+            it.lastParentInventoryGrid = null;
+            try
+            {
+                GridObject go = it.gridObject;
+                if (go != null) go.ClearGridPositions();
+            }
+            catch { }
+            im.inGrid = false;
+            im.inPouch = false;
+
+            int objBefore = -1;
+            int objAfter = -1;
+            try
+            {
+                GameManager gm = GameManager.main;
+                if (gm != null)
+                {
+                    objBefore = gm.objsInGrid;
+                    if (gm.objsInGrid > 0) gm.objsInGrid = gm.objsInGrid - 1;
+                    objAfter = gm.objsInGrid;
+                }
+            }
+            catch { }
+
+            RefreshOccupancy();
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("action", "drop_item");
+            w.Prop("uid", MiniJson.Str(pc.Action, "uid", ""));
+            w.Prop("dropped_at", drop.x.ToString("0.##") + "," + drop.y.ToString("0.##"));
+            w.Name("old_cells").BeginArray();
+            for (int i = 0; i < oldCells.Count; i++) w.Value(oldCells[i]);
+            w.EndArray();
+            w.Prop("cells_left", ItemCells(it).Count);
+            w.Prop("parent", it.parentInventoryGrid == null ? "" : it.parentInventoryGrid.name);
+            w.Prop("in_grid_flag", im.inGrid);
+            w.Prop("objs_in_grid_before", objBefore);
+            w.Prop("objs_in_grid_after", objAfter);
+            w.Prop("in_bag", ItemInBag(MiniJson.Str(pc.Action, "uid", "")));
+            w.Prop("free_squares", CountFreeSquares());
+            w.EndObject();
+            pc.DiagJson = w.ToString();
         }
 
         private static void DiagEventAction(PendingCommand pc)
@@ -1877,13 +2902,13 @@ namespace BphBridge
             string delta = pc.Before != null && after != null ? pc.Before.DiffJson(after) : "{}";
             w.Raw(delta);
 
-            // SPIKE-07 §4 第二步：结构化战斗回执。
+            // SPIKE-07 §4 第二步：结构化战斗回执
             // 光有 delta 只能说明「数值变了」，说不清「谁打谁、挡了多少、上了什么状态」；
-            // 效果不可见的物品（HEAT POTION / LUCKY STAR / REVERSAL AMULET）就永远学不到。
+            // 效果不可见的物品（HEAT POTION / LUCKY STAR / REVERSAL AMULET）就永远学不到
             w.Name("receipt");
             Receipt.Write(w, pc, after);
 
-            // 只读诊断（diag_event / open_chest）的原始数据。
+            // 只读诊断（diag_event / open_chest）的原始数据
             w.Name("diag");
             if (pc.DiagJson == null) w.Null();
             else w.Raw(pc.DiagJson);
@@ -1945,3 +2970,5 @@ namespace BphBridge
         }
     }
 }
+
+

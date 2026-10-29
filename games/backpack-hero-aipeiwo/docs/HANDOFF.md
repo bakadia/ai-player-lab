@@ -3,6 +3,23 @@
 > 2026-10-28 15:00 · 写给**没有任何上下文**的接手者。
 > 读完这份再动手，不要去重新调查已经确认过的事。
 >
+> **2026-10-29 09:55 更新**：桥接 **v8.14**（**108,544 bytes，SHA256 `8BF1CAE1…`**，已部署）。
+> `place_item` 打通（3×3 / 13 格真机验收），并新增 **`move_item` / `rotate_item` /
+> `drop_item`**：13 格上「移动(free 不变) → 旋转(free 不变) → 丢弃(free +2、变 loose) →
+> 放回(不重叠)」全跑通。验收门是 `ItemInBag`，**不要只看 `items_in_grid`**。
+> 下一步：把这三个动作接进 `legal` / `loop.py` 的「腾位」，以及 swap、按朝向搜落点。
+> 详见 `docs/RESULT-20261029-place-item.md`、`docs/RESULT-20261029-move-rotate-drop.md`
+> 与 `docs/HANDOFF-NEXT-20261029-0100.md`；下面 §0 的 v7 / 85,504 bytes 是 10-28 15:00 的快照。
+>
+> **2026-10-29 01:00 更新**：桥接 **v8.11**（**103,424 bytes，SHA256 `721509DE…`**，已部署）。
+> **`place_item` 打通了**：根因是 `EndDrag()` 会把 transform 拉回 `startPosition`，改成
+> `StartDrag → 移到目标 → 改 startPosition → EndDrag` 即可。3×3 教程三件（`free 9→6→2→0`）
+> 和升级后的 13 格（开箱 3 件，`free 3→0`）都真机验收：`cells` 在背包内、
+> `parent=Grid Parent`、画面可见。验收门改成 `ItemInBag`，**不要只看 `items_in_grid`**。
+> 下一步：背包满时的 `move_item`/`rotate_item`/`drop_item`。
+> 详见 `docs/RESULT-20261029-place-item.md` 与 `docs/HANDOFF-NEXT-20261029-0100.md`；
+> 下面 §0 的 v7 / 85,504 bytes 是 10-28 15:00 的快照。
+>
 > **2026-10-28 22:00 更新**：桥接 **v8.6**（94,720 bytes，SHA256 `E03D1E20…`，已部署）
 > 真机验证了 `open_chest`（能开 Chest，`items_total +4`）。`place_item via=bag`
 > 的 parent 已是 **`Grid Parent`**（正确），但 `EndDrag()` 会重置到 `startPosition`

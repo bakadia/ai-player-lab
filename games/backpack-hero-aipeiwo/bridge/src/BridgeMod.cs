@@ -134,6 +134,20 @@ namespace BphBridge
                 if (pc.WaitItemsInGrid)
                 {
                     pc.ItemsInGridBefore = pc.Before == null ? -1 : pc.Before.ItemsInGrid;
+                    // v8.7：验收改成「真的在主背包格子里」。`items_in_grid` 会在
+                    // AddToGrid 的占格判定之前就 +1，包外（Items 容器）也认，不能当验收。
+                    pc.WaitInBag = true;
+                    pc.PlaceUid = MiniJson.Str(pc.Action, "uid", "");
+                    if (pc.TimeoutMs < 10000) pc.TimeoutMs = 10000;
+                }
+
+                // 背包内移动/旋转：等它仍然在包里（动作是同步的，主要靠 settle）；
+                // 丢弃：等它真的不在包里了。
+                if (atype == "move_item" || atype == "rotate_item" || atype == "drop_item")
+                {
+                    pc.PlaceUid = MiniJson.Str(pc.Action, "uid", "");
+                    if (atype == "drop_item") pc.WaitDropped = true;
+                    else pc.WaitInBag = true;
                     if (pc.TimeoutMs < 10000) pc.TimeoutMs = 10000;
                 }
 
@@ -176,6 +190,14 @@ namespace BphBridge
                 _pending.LastChangeTime = now;
             }
 
+            // 动作直接抛错的（比如 place_item 找不到放得下的格子）没必要再等阶段门，
+            // 否则每次失败都白等满 10 秒，agent 的重试/换格会非常慢。
+            if (_pending.Error != null)
+            {
+                FinishPending(null, now);
+                return;
+            }
+
             float elapsedMs = (now - _pending.StartTime) * 1000f;
             bool settled = (now - _pending.LastChangeTime) >= Actions.SettleSeconds;
             bool timedOut = elapsedMs >= _pending.TimeoutMs;
@@ -187,7 +209,12 @@ namespace BphBridge
                 phaseReady = phaseReady && Actions.ViewingTopIs(_pending.WaitViewingTop);
             if (_pending.WaitNoPopup) phaseReady = phaseReady && Actions.NoPopups();
             if (_pending.WaitWorldChange) phaseReady = phaseReady && Actions.WorldChanged(_pending.WorldSig) && Actions.WorldReady();
-            if (_pending.WaitItemsInGrid) phaseReady = phaseReady && Actions.ItemsInGridAbove(_pending.ItemsInGridBefore);
+            if (_pending.WaitItemsInGrid)
+                phaseReady = phaseReady && (_pending.WaitInBag
+                    ? Actions.ItemInBag(_pending.PlaceUid)
+                    : Actions.ItemsInGridAbove(_pending.ItemsInGridBefore));
+            if (_pending.WaitDropped)
+                phaseReady = phaseReady && !Actions.ItemInBag(_pending.PlaceUid);
             if (_pending.WaitLooseAbove)
                 phaseReady = phaseReady && Actions.LooseItemsOrCombat(
                     _pending.LooseBefore,
@@ -247,7 +274,15 @@ namespace BphBridge
                 parts.Add("viewingTop != " + pc.WaitViewingTop);
             if (pc.WaitNoPopup && !Actions.NoPopups()) parts.Add("popups still open");
             if (pc.WaitWorldChange && !Actions.WorldChanged(pc.WorldSig)) parts.Add("world did not change");
-            if (pc.WaitItemsInGrid && !Actions.ItemsInGridAbove(pc.ItemsInGridBefore)) parts.Add("item did not enter the grid");
+            if (pc.WaitItemsInGrid)
+            {
+                if (pc.WaitInBag && !Actions.ItemInBag(pc.PlaceUid))
+                    parts.Add("item not in bag (cells/parent)");
+                else if (!pc.WaitInBag && !Actions.ItemsInGridAbove(pc.ItemsInGridBefore))
+                    parts.Add("item did not enter the grid");
+            }
+            if (pc.WaitDropped && Actions.ItemInBag(pc.PlaceUid))
+                parts.Add("item still in bag after drop");
             if (pc.WaitLooseAbove && !Actions.LooseItemsOrCombat(
                     pc.LooseBefore, pc.Before == null ? -1 : pc.Before.BattlePhase))
                 parts.Add("no loot appeared and no combat started");

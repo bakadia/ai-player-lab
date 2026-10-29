@@ -231,3 +231,38 @@ if (!inSpecialReorg && inventoryPhase != choose(2) && !limitedItemReorganize) re
   （上一班踩过，`/r` 的注释还留着）。
 - 判断「被动/主动」不能只看 `playType`；`Item2.ItemType` 的 Accessory(6)/Relic(22)
   只能当辅助信号，最终以游戏自己的 `CanBeUsedActive` 为准。
+
+## E11 · 用 PowerShell 管道改源码，整个文件的中文注释被转码毁掉
+
+**怎么发现的**：想批量替换 `Actions.cs` 里一个函数名，图省事写了
+
+```powershell
+(Get-Content .\src\Actions.cs -Raw) -replace 'OldName\(', 'NewName(' | Set-Content .\src\Actions.cs -Encoding UTF8
+```
+
+改完编译照过（代码行是 ASCII），但文件里所有中文注释变成 `锛?` 之类的乱码，
+而且 **171 行注释和下一行代码被合并成一行**——`// 注释` 把后面的
+`RefreshOccupancy();` 吞掉，运行时不报错、只是少执行一句。
+
+**真相**：Windows PowerShell 5.1 的 `Get-Content -Raw` 在没有 BOM 时按**系统 ANSI
+（这里是 cp936/GBK）**解码。源码是 UTF-8 无 BOM，于是每个汉字被拆成两个 GBK 字符；
+写回时又按 UTF-8 编码，等于「UTF-8→GBK→UTF-8」双重转码。
+行尾的中文经常以 3 字节 UTF-8 字符结尾，GBK 解码把最后 1 个字节和后面的 `\r\n`
+一起吃成 `?`，换行就没了。
+
+**为什么坑**：
+
+- 编译不报错：乱码只在注释里，被吞掉的代码行也「合法」（变成注释的一部分）。
+- 尺寸/哈希仍然能对上（同一份源码两次构建本来就不保证字节相同），容易以为没事。
+- 没有 undo：`Set-Content` 直接覆盖原文件。
+
+**以后怎么办**：
+
+- **改源码只用编辑工具的 `edit`/`write`**，不要用 PowerShell 文本管道/`-replace` 落盘。
+- 非要命令行处理，必须显式编码：
+  `Get-Content -Encoding UTF8` + `Set-Content -Encoding UTF8`（PS5.1 仍会加 BOM），
+  或者用 Python：`open(..., encoding='utf-8')`。
+- 已经毁了可以救：用 .NET `Encoding.GetEncoding(936)` 建「字符→原始字节」逆表，
+  把乱码文本转回字节再按 UTF-8 解码；行尾被吃掉的换行按「`?` + 缩进」补回去。
+  本次就这么恢复的，并用「逐方法比 IL」证明代码没变（除预期改动外完全一致）。
+

@@ -32,7 +32,7 @@ from ledger import Ledger  # noqa: E402
 from policy import Flags, choose, flags_label, score_action, set_flags  # noqa: E402
 
 MAX_CONSECUTIVE_NOCHANGE = 4
-MAX_LEVEL_ATTEMPTS = 6   # 同一次升级最多试几次，超过就停下来等人看 UI
+MAX_LEVEL_ATTEMPTS = 12  # 同一次升级最多试几次（扩容要 grant+逐格点+收尾，步数变多了）
 
 # 房间里事件的优先级：先打怪（有经验），再拿东西，最后走出口
 EVENT_PRIORITY = {
@@ -140,7 +140,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--record-unverified", action="store_true",
                     help="老行为：动作没生效也记一条账本样本（会把物品永久记成 0/0，慎用）")
     ap.add_argument("--level-up-via", default="select", choices=["select", "spaces", "end"],
-                    help="收升级界面的方式。实测只有 select 有效（默认），另两个留作对照")
+                    help="收升级界面的方式。select/spaces 都走 Select()（spaces 曾用 ChangeSpaces "
+                         "加配额，会把 numberToUnlock 翻倍，已修）；end 只 EndLevelUp")
+    ap.add_argument("--unlock-spaces", type=int, default=0, metavar="N",
+                    help="升级界面里先点 N 个 GridExtension 扩背包（9->13），再结束升级；"
+                         "这条路径会把 finish_level_up 改成 via=end，避免 Select() 重复扣配额")
+    ap.add_argument("--grant-spaces", type=int, default=0, metavar="N",
+                    help="测试钩子：升级界面里先 ChangeSpaces(N)+SetupSpaces 造配额。"
+                         "新开局 numberToUnlock 恒为 0（=spacesSaved），没有它点不动格子")
     ap.add_argument("--auto-retry", action="store_true",
                     help="阵亡后调 GameManager.Retry() 再开一局（需要新桥接的 retry_run）")
     ap.add_argument("--max-retries", type=int, default=8,
@@ -173,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     arrivals: dict[str, int] = {}      # 每个房间到过几次（用来终结「两房间来回走」）
     bad_uids: dict[str, Any] = {}      # uid -> 在哪个回合里失败过（只在本回合内剔除）
     level_attempt = 0
+    unlock_left = max(0, args.unlock_spaces)   # 还要点几个 GridExtension 扩背包
+    grant_left = max(0, args.grant_spaces)     # 测试钩子：还要塞多少配额
     nochange_streak = 0
     reorg_fails = 0                 # 连续多少次 finish_reorganize 没生效（E9）
     steps = 0
@@ -343,6 +352,23 @@ def main(argv: list[str] | None = None) -> int:
                         ledger.save()
                     explored.add(item_name.strip())
 
+                if action.get("type") == "unlock_spaces":
+                    _d = ack.get("diag") or {}
+                    _clicked = _d.get("clicked")
+                    _clicked = _clicked if isinstance(_clicked, int) else 0
+                    unlock_left = max(0, unlock_left - _clicked)
+                    print(f"     （扩容：点了 {_clicked} 个格子 -> grid "
+                          f"{_d.get('grid_squares_before')}→{_d.get('grid_squares_after')}，"
+                          f"剩余配额 {unlock_left}）")
+                    if _clicked <= 0:
+                        # 没配额/没候选：本次升级不加格子了，免得死循环
+                        unlock_left = 0
+                        print("     （扩容：没有可点的 GridExtension，改成正常收尾）")
+                if action.get("type") == "grant_spaces":
+                    _d = ack.get("diag") or {}
+                    print(f"     （配额 {_d.get('number_to_unlock_before')}→"
+                          f"{_d.get('number_to_unlock_after')}）")
+
                 if action.get("type") == "place_item" and ack.get("changed"):
                     place_skips.pop(action.get("uid", ""), None)
                 if action.get("type") == "place_item" and not ack.get("changed"):
@@ -440,15 +466,31 @@ def main(argv: list[str] | None = None) -> int:
                     record({"event": "level_up_stuck", "attempts": level_attempt})
                     break
                 lvia = args.level_up_via
-                if level_attempt > 2 and lvia == "select":
+                if grant_left > 0:
+                    action = {"type": "grant_spaces", "n": grant_left}
+                    grant_left = 0
+                    print("     （测试钩子：先塞扩容配额）")
+                elif unlock_left > 0:
+                    # 扩容：升级界面里点 GridExtension 加格子（点一个 = 消耗 1 个配额）。
+                    # **一次只点一个**：Click 后 SetupSpaces 会重建候选对象，
+                    # 同一帧里连点会点到已销毁的 extension（配额扣了、格子没加）。
+                    # 动作之间本来就有 settle（~0.5s），正好让新对象注册完。
+                    action = {"type": "unlock_spaces", "n": 1}
+                    print(f"     （扩容：点 1 个 GridExtension，剩余 {unlock_left}）")
+                elif level_attempt > 2 and lvia == "select":
                     # 兜底：连续两次 select 没关掉，再给它一次「少选一格」的机会
                     # （numberToUnlock 可能算多了，多点一下会把已选中的取消）。
                     action = {"type": "finish_level_up", "via": "select",
                               "times": max(1, level_attempt - 2)}
                 else:
                     action = {"type": "finish_level_up", "via": lvia}
-                print(f"     （升级收尾第 {level_attempt} 次，via={action.get('via')}"
-                      f"{'，times=' + str(action.get('times')) if action.get('times') else ''}）")
+                if action.get("type") == "unlock_spaces":
+                    # 扩完必须用 end 收尾（Select 会再扣配额）
+                    lvia = "end"
+                    print(f"     （升级收尾第 {level_attempt} 次，via=end）")
+                else:
+                    print(f"     （升级收尾第 {level_attempt} 次，via={action.get('via')}"
+                          f"{'，times=' + str(action.get('times')) if action.get('times') else ''}）")
             elif "close_popup" in types:
                 action = {"type": "close_popup"}
             elif ui.get("select_item_dialogues"):
@@ -563,6 +605,24 @@ def main(argv: list[str] | None = None) -> int:
             if action.get("type") == "move_to_room" and ack.get("changed"):
                 _arr = action.get("room")
                 arrivals[_arr] = arrivals.get(_arr, 0) + 1
+            # 扩容（升级界面）：grant 是测试钩子，unlock 点真实 GridExtension。
+            # 放这里也处理一份：升级动作走的是地图分支。
+            if action.get("type") == "unlock_spaces":
+                _d = ack.get("diag") or {}
+                _clicked = _d.get("clicked")
+                _clicked = _clicked if isinstance(_clicked, int) else 0
+                unlock_left = max(0, unlock_left - _clicked)
+                print(f"     （扩容：点了 {_clicked} 个格子 -> grid "
+                      f"{_d.get('grid_squares_before')}→{_d.get('grid_squares_after')}，"
+                      f"剩余配额 {unlock_left}）")
+                if _clicked <= 0:
+                    unlock_left = 0
+                    print("     （扩容：没有可点的 GridExtension，改成正常收尾）")
+            if action.get("type") == "grant_spaces":
+                _d = ack.get("diag") or {}
+                print(f"     （配额 {_d.get('number_to_unlock_before')}→"
+                      f"{_d.get('number_to_unlock_after')}）")
+
             # 地图阶段的战利品摆放：和战斗里同一套「换候选格重试一次」。
             if action.get("type") == "place_item" and ack.get("changed"):
                 place_skips.pop(action.get("uid", ""), None)

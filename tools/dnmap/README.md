@@ -53,6 +53,35 @@ python tools\dnmap\show.py GameManager --methods-only
            "properties":[]}]}
 ```
 
+## 读方法体：`Ildump.exe`（Mono.Cecil）
+
+`Dump.cs` 只有签名。要回答「这个方法到底干了什么」（比如
+`ItemMovement.EndDrag()` 为什么把我们设的坐标冲掉），用同一个 Mono.Cecil 直接读 IL：
+
+```powershell
+# 编译（bin 目录已 gitignore）
+$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+& $csc /nologo /target:exe /langversion:5 /out:tools\dnmap\bin\Ildump.exe `
+    /r:tools\dnmap\bin\Mono.Cecil.dll tools\dnmap\Ildump.cs
+
+# 整个类型（字段 + 所有方法 IL）
+tools\dnmap\bin\Ildump.exe "<Assembly-CSharp.dll>" ItemMovement > itemmovement.il.txt
+
+# 只看几个方法（按方法名精确匹配）
+tools\dnmap\bin\Ildump.exe "<Assembly-CSharp.dll>" ItemMovement StartDrag EndDrag AddToGrid
+
+# 嵌套的编译器生成类型（协程）也能点名
+tools\dnmap\bin\Ildump.exe "<Assembly-CSharp.dll>" "LevelUpManager/<LevelUp>d__39" MoveNext
+```
+
+输出里 `IL_xxxx: opcode operand`，分支的 operand 会带目标偏移。Windows PowerShell 的
+`>` 是 UTF-16，给别的工具读之前转一下：
+
+```powershell
+$c = Get-Content x.il.txt -Encoding Unicode
+[IO.File]::WriteAllLines((Resolve-Path x.il.txt), $c, (New-Object Text.UTF8Encoding($false)))
+```
+
 ## 已知限制
 
 - **只有签名，没有方法体**。要读实现逻辑还得上真反编译器（本项目目前不需要）：
