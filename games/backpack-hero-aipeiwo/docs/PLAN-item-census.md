@@ -105,7 +105,7 @@ status_inflicted[], status_self[], cells, cost, rarity, types[]
 
 - [x] M1 `dump_item_catalog` 跑通，`runtime/item-catalog.json` 落盘（含枚举表）
 - [x] M2 分类器跑通：`unknown` 占比 < 20%，账本交叉验证偏差清单出来
-- [ ] M3 `--sustain` 接进 policy + 单测（满血不浪费、濒死不乱用）
+- [x] M3 `--sustain` 接进 policy + 单测（满血不浪费、濒死不乱用）
 - [ ] M4 真机 A/B 2 局，掉血/楼层有数（写进 RESULT）
 
 ## 5. 坑（先记着）

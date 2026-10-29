@@ -6,6 +6,21 @@
       "effects": {},
       "samples": 1
     },
+    "BLESSED HERB": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "items:spawned": {
+          "count": 1,
+          "sum": 1.0
+        },
+        "phase:inventory:3": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 1
+    },
     "BLESSED POTION": {
       "block_sum": 0,
       "damage_sum": 0,
@@ -111,6 +126,17 @@
       "energy_sum": 10,
       "samples": 5
     },
+    "POISON POTION": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "status:poison:enemy": {
+          "count": 2,
+          "sum": 12.0
+        }
+      },
+      "samples": 1
+    },
     "POISON SHURIKEN": {
       "block_sum": 0,
       "damage_sum": 3,
@@ -134,10 +160,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 1253,
+      "block_sum": 2037,
       "damage_sum": 0,
       "effects": {},
-      "samples": 178
+      "samples": 290
     },
     "SMELT": {
       "block_sum": 0,
@@ -155,25 +181,56 @@
       "damage_sum": 0,
       "samples": 2
     },
-    "WOODEN SWORD": {
-      "absorbed_sum": 564,
+    "TOY MACHETE": {
       "block_sum": 0,
-      "damage_sum": 3368,
+      "damage_sum": 5,
+      "effects": {
+        "status:dodge:enemy": {
+          "count": 1,
+          "sum": 1.0
+        },
+        "status:rage:player": {
+          "count": 2,
+          "sum": 2.0
+        }
+      },
+      "samples": 2
+    },
+    "WOODEN SWORD": {
+      "absorbed_sum": 718,
+      "block_sum": 0,
+      "damage_sum": 4075,
       "effects": {
         "gold": {
           "count": 1,
           "sum": 5.0
         },
-        "status:fire:player": {
-          "count": 4,
+        "luck:legendary": {
+          "count": 1,
+          "sum": 1.5
+        },
+        "luck:rare": {
+          "count": 1,
+          "sum": 3.0
+        },
+        "luck:uncommon": {
+          "count": 1,
           "sum": 6.0
         },
+        "status:dodge:enemy": {
+          "count": 1,
+          "sum": 1.0
+        },
+        "status:fire:player": {
+          "count": 6,
+          "sum": 8.0
+        },
         "status:rage:enemy": {
-          "count": 46,
-          "sum": 46.0
+          "count": 56,
+          "sum": 56.0
         }
       },
-      "samples": 623
+      "samples": 760
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",

@@ -468,38 +468,86 @@ def plan_repack(bag: Bag) -> Plan | None:
 # ---------- 丢哪一件 ----------
 
 
-def item_value(name: str, ledger: Any) -> float:
+def item_value(name: str, ledger: Any, db: Any = None) -> float:
     """粗估值：账本里测到的「伤害 + 格挡 + 状态效果」，没样本给 1.0。
 
     没测过的物品不当作 0：0 会让它永远第一个被丢，而它可能是这局最好的东西。
+
+    `db`（`agent/itemdb.py` 的 ItemDB）给了静态类别信息后，按类别补一点「不该丢」的分：
+    续航/遗物最保值，每回合护甲次之，辅助看它给多少。这些是**加分**，不是覆盖账本，
+    所以「账本测出来很强」的物品仍然排在前面。
     """
-    if ledger is None:
+    scored = False
+    value = 0.0
+    if ledger is not None:
+        dmg = ledger.estimate_damage(name)
+        blk = ledger.estimate_block(name)
+        eff = ledger.effect_score(name)
+        if dmg is not None or blk or eff:
+            value = float(dmg or 0.0) + float(blk or 0.0) + float(eff or 0.0)
+            scored = True
+    if db is not None:
+        st = db.get(name)
+        if st is not None:
+            if st.category == "sustain":
+                value += 4.0 + min(st.heal, 20.0) * 0.2
+            elif st.category == "relic":
+                value += 3.0
+            elif st.block_per_turn > 0:
+                value += 2.0 + st.block_per_turn * 0.5
+            elif st.category == "support":
+                value += 1.0 + (st.support_damage + st.support_block) * 0.3
+            elif st.category == "attack":
+                value += 0.0                 # 让账本/静态数值自己说话
+            if "curse" in st.tags:
+                value -= 2.0
+    if not scored and db is None:
         return 1.0
-    dmg = ledger.estimate_damage(name)
-    blk = ledger.estimate_block(name)
-    eff = ledger.effect_score(name)
-    if dmg is None and not blk and not eff:
-        return 1.0
-    return float(dmg or 0.0) + float(blk or 0.0) + float(eff or 0.0)
+    return value if value > 0 else 0.5
 
 
-def drop_ranking(bag: Bag, ledger: Any, protected: Iterable[str] = ()) -> list[tuple[float, ItemFit]]:
-    """按「最该丢的先」排序：价值低优先，同价值时大的优先（腾得多）。"""
+def drop_ranking(bag: Bag, ledger: Any, protected: Iterable[str] = (),
+                 db: Any = None, keep: tuple[str, ...] = ("sustain", "relic")
+                 ) -> list[tuple[float, ItemFit]]:
+    """按「最该丢的先」排序：价值低优先，同价值时大的优先（腾得多）。
+
+    `--sustain` 打开（且给了 `db`）时，`keep` 里的类别默认不进候选——
+    食物/遗物是续航来源，为了塞一件普通武器把它们丢掉是本末倒置。
+    但如果背包里**全是**这类东西，还是会退回去丢一件（否则永远腾不出位置）。
+    """
     skip = set(protected)
     rows: list[tuple[float, ItemFit]] = []
+    kept: list[tuple[float, ItemFit]] = []
+    attacks: list[tuple[float, ItemFit]] = []
     for it in bag.in_bag():
         if it.uid in skip:
             continue
-        value = item_value(it.name, ledger)
+        value = item_value(it.name, ledger, db)
         if it.uid and it.name and it.name.strip().upper().endswith("AMULET"):
             value += 3.0           # 饰品多为被动，没见过也先留着
-        rows.append((value, it))
+        row = (value, it)
+        st = db.get(it.name) if db is not None else None
+        if st is not None and st.category == "attack" and st.damage_active > 0:
+            attacks.append(row)
+        if st is not None and st.category in keep:
+            kept.append(row)
+        else:
+            rows.append(row)
+
+    # 唯一的主力输出不丢：真机上出现过「为捡 ELECTRIC WAND 把 WOODEN SWORD 丢了」，
+    # 之后整局只能用盾挡、29 点伤害打进 11 血直接死。宁可少捡一件。
+    if db is not None and len(attacks) == 1 and attacks[0] in rows:
+        rows.remove(attacks[0])
+        kept.append(attacks[0])
+
+    rows = rows or kept               # 只剩续航/遗物/主武器时才动它们
     rows.sort(key=lambda row: (row[0], -row[1].shape_area(), row[1].name))
     return rows
 
 
-def choose_drop(bag: Bag, ledger: Any, protected: Iterable[str] = ()) -> ItemFit | None:
-    ranked = drop_ranking(bag, ledger, protected)
+def choose_drop(bag: Bag, ledger: Any, protected: Iterable[str] = (),
+                db: Any = None) -> ItemFit | None:
+    ranked = drop_ranking(bag, ledger, protected, db)
     return ranked[0][1] if ranked else None
 
 

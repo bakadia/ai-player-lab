@@ -58,6 +58,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from ledger import Ledger
+from itemdb import ItemDB
 
 EXPLORE_SCORE = 0.5
 LOOT_SCORE = 50.0
@@ -96,6 +97,11 @@ KILL_SLACK = 0.5
 # 1.0 只是让这类物品不再恒为 0；具体值应该等更多样本再调，不要拍脑袋调大。
 STATUS_VALUE = 1.0
 
+# 续航（`--sustain`）：一点**有效治疗**（不超过缺失血量）值多少分。
+# 取 1.0 = 「回 1 血」和「挡 1 伤」等价——都不是直接赢，但都能多撑一回合。
+# 满血时有效治疗是 0，所以不会在满血时乱吃食物（与 `_block_value` 的 min 逻辑一致）。
+SUSTAIN_WEIGHT = 1.0
+
 ATTACK = 0  # Enemy+Attack+Type.attack
 
 
@@ -109,11 +115,13 @@ class Flags:
     value_energy: bool = False
     value_status: bool = False
     focus_fire: bool = False
+    sustain: bool = False
     explore_score: float = EXPLORE_SCORE
     survival_prior: float = SURVIVAL_PRIOR
     block_weight: float = BLOCK_WEIGHT
     explore_threat_weight: float = EXPLORE_THREAT_WEIGHT
     explore_threat_cap: float = EXPLORE_THREAT_CAP
+    sustain_weight: float = SUSTAIN_WEIGHT
 
 
 _DEFAULT_FLAGS = Flags()
@@ -146,7 +154,8 @@ def flags_label(flags: Flags | None = None) -> str:
                          ("explore_threat", f.explore_threat),
                          ("value_energy", f.value_energy),
                          ("value_status", f.value_status),
-                         ("focus_fire", f.focus_fire)) if v]
+                         ("focus_fire", f.focus_fire),
+                         ("sustain", f.sustain)) if v]
     return "+".join(on) if on else "baseline"
 
 
@@ -167,7 +176,6 @@ def energy_value(state: dict[str, Any], ledger: Ledger) -> float:
 
 def _enemies(state: dict[str, Any]) -> list[dict[str, Any]]:
     return [e for e in state.get("enemies", []) if e.get("targetable", True)]
-
 
 def _items_by_uid(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {it["uid"]: it for it in state.get("backpack", {}).get("items", [])}
@@ -220,6 +228,7 @@ def _score_parts(
     ledger: Ledger,
     explored: set[str],
     flags: Flags,
+    db: ItemDB | None = None,
 ) -> tuple[float, float, float, str]:
     """返回 (价值, 一次性奖励, 能量, 理由)。
 
@@ -265,9 +274,34 @@ def _score_parts(
     else:
         inc_txt = f"{incoming}"
 
+    # 续航（`--sustain`）：先算「有效治疗」，账本有没有样本都要算——
+    # 真机上大部分食物从来没被用过（账本里没有样本），如果只在 `est is not None`
+    # 之后才给分，`--sustain` 对它们就是完全不可见的（8 分钟 A/B 里一条 sustain
+    # 都没触发，就是这么来的）。
+    sustain_worth = 0.0
+    sustain_why = ""
+    if flags.sustain and db is not None:
+        st = db.get(name)
+        if st is not None and st.heal > 0:
+            max_hp = int(state.get("player", {}).get("max_hp") or 0)
+            if max_hp > 0:
+                missing = max(0, max_hp - hp)
+                effective = min(st.heal, float(missing))
+                sustain_worth = effective * flags.sustain_weight
+                if effective > 0:
+                    sustain_why = (f"sustain={effective:.0f}/{st.heal:.0f}hp"
+                                   f"(hp={hp}/{max_hp}) worth={sustain_worth:+.2f}")
+                else:
+                    sustain_why = "sustain=0 (full hp)"
+
     est = ledger.estimate_damage(name)
     if est is None:
         key = name.strip()
+        # 没测过的食物：有效治疗本身就是分数。检查过 `explored` 之后再判它，
+        # 否则「试过一次的回血物品」会在真需要它的时候被永久跳过。
+        if sustain_worth > 0:
+            total = flags.explore_score + sustain_worth
+            return total, 0.0, energy, f"{name}: {sustain_why} (unknown item)"
         if key in explored:
             return 0.0, 0.0, energy, f"{name}: already explored"
         # 下一击必死，又没见过这件东西：先试它。理由见文件头 §3。
@@ -337,6 +371,11 @@ def _score_parts(
             value += worth
             why_extra += f" effects={eff:.2f} worth={worth:+.2f}"
 
+    # 续航：用上面算好的有效治疗（满血时是 0，不会浪费；理由照样写进日志）。
+    if sustain_why:
+        value += sustain_worth
+        why_extra += " " + sustain_why
+
     bonus = LETHAL_BONUS if lethal else kill_value
     why = (f"{name}: est_dmg={est:.2f} est_block={block:.2f} "
            f"eff_block={bv:.2f} incoming={inc_txt} hp={hp} "
@@ -350,6 +389,7 @@ def score_action(
     ledger: Ledger,
     explored: set[str],
     flags: Flags | None = None,
+    db: ItemDB | None = None,
 ) -> tuple[float, str]:
     """返回 (分数, 理由)。理由是给人看的，调试时不至于只有数字。
 
@@ -357,7 +397,7 @@ def score_action(
     这样复盘的日志仍然能横向比较。
     """
     f = flags or _active_flags
-    value, bonus, _energy, why = _score_parts(action, state, ledger, explored, f)
+    value, bonus, _energy, why = _score_parts(action, state, ledger, explored, f, db)
     return value + bonus, why
 
 
@@ -366,6 +406,7 @@ def choose(
     ledger: Ledger,
     explored: set[str] | None = None,
     flags: Flags | None = None,
+    db: ItemDB | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """在 state.legal 里挑一条。返回 (action, 理由)；None 表示没有可做的。"""
     explored = explored if explored is not None else set()
@@ -380,7 +421,7 @@ def choose(
     best_why = ""
 
     for action in legal:
-        value, bonus, energy, why = _score_parts(action, state, ledger, explored, f)
+        value, bonus, energy, why = _score_parts(action, state, ledger, explored, f, db)
         s = value / max(1.0, energy) if f.ratio_energy else value
         s += bonus
         if s > best_score:
@@ -394,3 +435,43 @@ def choose(
             if a.get("type") == "end_turn":
                 return a, f"all non-positive (best {best_score:.2f}), end turn"
     return best, f"score={best_score:.2f} {best_why}"
+
+# ---------------------------------------------------------------- 奖励 / 商店三选一
+
+
+def reward_score(name: str, db: ItemDB | None, hp: int = 0, max_hp: int = 0) -> float:
+    """候选只有名字时，估一下「拿它值不值」。
+
+    没有 `--sustain` 也不该固定拿第 0 个：这个函数只回答排序问题，
+    与战斗打分无关（真正用它的是 loop.py 的 `pick_dialogue`）。
+    """
+    if db is None:
+        return 0.0
+    st = db.get(name)
+    if st is None:
+        return 0.25                      # 不认识的候选给一点点分，别永远排第一
+    score = 0.0
+    if st.heal > 0 and max_hp > 0:
+        score += min(st.heal, float(max(0, max_hp - hp))) * SUSTAIN_WEIGHT
+    score += st.damage_active / max(1, st.energy_cost) * 2.0
+    score += st.block_active * 0.5 + st.block_per_turn * 1.5
+    score += st.max_hp_gain * 2.0
+    if st.category == "relic":
+        score += 1.0
+    if st.category == "support":
+        score += (st.support_damage + st.support_block) * 0.3
+    if "curse" in st.tags:
+        score -= 3.0
+    return score
+
+
+def pick_reward(names: list[str], db: ItemDB | None, hp: int = 0, max_hp: int = 0) -> int:
+    """在 N 选 1 里挑一个下标；名单为空或没有 db 时退回 0（老行为）。"""
+    if not names or db is None:
+        return 0
+    best_idx, best = 0, float("-inf")
+    for i, name in enumerate(names):
+        s = reward_score(name, db, hp, max_hp)
+        if s > best:
+            best_idx, best = i, s
+    return best_idx

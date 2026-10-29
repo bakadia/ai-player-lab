@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from backpack import Bag, choose_drop, plan_place
+from backpack import Bag, choose_drop, item_value, plan_place
 
 Log = Callable[[str], None]
 
@@ -54,6 +54,7 @@ def place_with_room(
     *,
     name: str = "",
     ledger: Any = None,
+    db: Any = None,
     drops_left: int = 0,
     max_moves: int = 3,
     log: Log | None = None,
@@ -87,10 +88,25 @@ def place_with_room(
                 if record:
                     record({"event": "place_no_room", "uid": uid, "why": plan.why})
                 return res
-            pick = choose_drop(bag, ledger)
+            pick = choose_drop(bag, ledger, db=db)
             if pick is None:
                 res.reason = "nothing to drop"
                 say("腾位：背包里没有可丢的东西")
+                return res
+
+            # 别为了捡一件东西把更值钱的丢掉。真机：为捡 ELECTRIC WAND 丢了
+            # WOODEN SWORD，之后只能挨打（29 伤害打进 11 血）。
+            incoming_value = item_value(name, ledger, db) if name else None
+            pick_value = item_value(pick.name, ledger, db)
+            if incoming_value is not None and pick_value > incoming_value + 0.5:
+                res.reason = "not worth dropping"
+                say(f"放弃 {label}：要丢的 {pick.name or pick.uid} 值 "
+                    f"{pick_value:.2f}，比它自己 {incoming_value:.2f} 还高")
+                if record:
+                    record({"event": "place_not_worth", "uid": uid, "name": name,
+                            "drop_uid": pick.uid, "drop_name": pick.name,
+                            "drop_value": round(pick_value, 2),
+                            "incoming_value": round(incoming_value, 2)})
                 return res
 
             say(f"腾位：丢 {pick.name or pick.uid}（{len(pick.cells)} 格，"

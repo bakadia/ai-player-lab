@@ -16,7 +16,7 @@ AGENT = HERE.parent
 sys.path.insert(0, str(AGENT))
 
 from ledger import Ledger  # noqa: E402
-from policy import choose  # noqa: E402
+from policy import Flags, choose, score_action  # noqa: E402
 from run import _damage_from  # noqa: E402
 
 
@@ -465,6 +465,118 @@ def test_focus_fire_rewards_killing_a_weak_enemy():
         print("PASS focus fire")
 
 
+def test_sustain_scoring():
+    """`--sustain`：食物按「有效治疗」打分；满血不浪费；未知 max_hp 不算。"""
+    from itemdb import ItemDB
+
+    db = ItemDB.load()
+    with tempfile.TemporaryDirectory() as td:
+        led = Ledger(Path(td) / "items.json")
+        led.record_use("WOODEN SWORD", 7, 0)
+        led.record_use("BANANAS", 0, 0)
+
+        items = [
+            {"uid": "i1", "name": "WOODEN SWORD", "energy_cost": 1},
+            {"uid": "i2", "name": "BANANAS", "energy_cost": 0},
+        ]
+        st = state_with(items)
+        st["player"]["max_hp"] = 40
+
+        # 满血：香蕉的有效治疗 = 0，仍然是剑赢
+        st["player"]["hp"] = 40
+        act, why = choose(st, led, set(), Flags(sustain=True), db)
+        assert act["uid"] == "i1", (act, why)
+        _, why_banana = score_action({"type": "use_item", "uid": "i2", "energy": 0},
+                                     st, led, set(), Flags(sustain=True), db)
+        assert "sustain=0 (full hp)" in why_banana, why_banana
+
+        # 掉到 20/40：+10 治疗 > 7 伤害，改吃香蕉
+        st["player"]["hp"] = 20
+        act, why = choose(st, led, set(), Flags(sustain=True), db)
+        assert act["uid"] == "i2", (act, why)
+        assert "sustain=10/10hp" in why, why
+
+        # 只差 3 点血：有效治疗被缺口截断到 3
+        st["player"]["hp"] = 37
+        _, why = score_action({"type": "use_item", "uid": "i2", "energy": 0},
+                              st, led, set(), Flags(sustain=True), db)
+        assert "sustain=3/10hp" in why, why
+
+        # 不开开关：还是剑
+        st["player"]["hp"] = 20
+        act, _ = choose(st, led, set(), Flags(), db)
+        assert act["uid"] == "i1"
+
+        # max_hp 哨兵(-1)：不知道缺口，不给治疗分（宁可不开火）
+        st["player"]["max_hp"] = -1
+        _, why = score_action({"type": "use_item", "uid": "i2", "energy": 0},
+                              st, led, set(), Flags(sustain=True), db)
+        assert "sustain" not in why, why
+
+        # **账本里没样本**的食物也要有分：真机上大部分食物从没被用过，
+        # 第一版在 `est is None` 分支就 return 了，--sustain 对它们完全不可见。
+        st["player"]["max_hp"] = 40
+        st["player"]["hp"] = 20
+        items2 = [{"uid": "i9", "name": "SALAMI", "energy_cost": 0}]
+        st2 = state_with(items2)
+        st2["player"]["hp"] = 20
+        st2["player"]["max_hp"] = 40
+        sc, why = score_action({"type": "use_item", "uid": "i9", "energy": 0},
+                               st2, led, set(), Flags(sustain=True), db)
+        assert "sustain=20/20hp" in why, why
+        assert sc >= 20.0, (sc, why)
+        print("PASS sustain scoring")
+
+
+def test_reward_pick():
+    """N 选 1：缺血时拿续航，否则拿输出/费用最高的。"""
+    from itemdb import ItemDB
+    from policy import pick_reward, reward_score
+
+    db = ItemDB.load()
+    names = ["WOODEN SWORD", "POULTICE"]     # 剑 7/1费；膏药 heal 20
+    assert pick_reward(names, db, hp=38, max_hp=40) == 0, "满血拿剑"
+    assert pick_reward(names, db, hp=10, max_hp=40) == 1, "残血拿膏药"
+    assert reward_score("POULTICE", db, 38, 40) < reward_score("WOODEN SWORD", db, 38, 40)
+    assert pick_reward([], db) == 0
+    assert pick_reward(["???"], None) == 0
+    print("PASS reward pick")
+
+
+def test_drop_keeps_sustain():
+    """腾位时 sustain/relic 不进候选；只剩它们时才退回去丢。"""
+    from backpack import Bag, ItemFit, choose_drop, drop_ranking
+    from itemdb import ItemDB
+
+    db = ItemDB.load()
+
+    def fit(uid, name, x):
+        return ItemFit(uid=uid, name=name, in_bag=True, needs=1, cells=frozenset({(x, 0)}))
+
+    bag = Bag(cells=frozenset({(0, 0), (1, 0), (2, 0)}),
+              items={"i1": fit("i1", "WOODEN SWORD", 0),
+                     "i2": fit("i2", "ROUGH BUCKLER", 1),
+                     "i3": fit("i3", "BANANAS", 2)})
+
+    # 续航不丢；唯一的攻击来源也不丢（真机：为捡魔杖把剑丢了，之后只能挨打）
+    ranked = drop_ranking(bag, None, db=db)
+    names = [it.name for _, it in ranked]
+    assert "BANANAS" not in names, ranked
+    assert "WOODEN SWORD" not in names, ranked
+    assert names == ["ROUGH BUCKLER"], ranked
+    assert choose_drop(bag, None, db=db).name == "ROUGH BUCKLER"
+
+    # 背包里只剩续航：退回去丢一件（否则永远腾不出位置）
+    only_food = Bag(cells=bag.cells, items={"i3": bag.items["i3"]})
+    pick2 = choose_drop(only_food, None, db=db)
+    assert pick2 is not None and pick2.name == "BANANAS", pick2
+
+    # 老行为（没有 db）：不看类别，按名字/面积排，可能丢掉食物
+    pick3 = choose_drop(bag, None)
+    assert pick3 is not None
+    print("PASS drop keeps sustain")
+
+
 if __name__ == "__main__":
     test_ledger()
     test_policy_explore_then_known()
@@ -485,6 +597,9 @@ if __name__ == "__main__":
     test_planner_actions_never_chosen_in_battle()
     test_current_room_event()
     test_focus_fire_rewards_killing_a_weak_enemy()
+    test_sustain_scoring()
+    test_reward_pick()
+    test_drop_keeps_sustain()
 
     # 背包 planner 的自测也一起跑（纯函数，不需要游戏）
     from test_backpack import main as backpack_tests

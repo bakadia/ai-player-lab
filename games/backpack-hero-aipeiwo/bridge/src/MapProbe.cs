@@ -981,6 +981,7 @@ namespace BphBridge
             catch { }
 
             int dialogueChoices = -1;
+            List<string> dialogueItems = new List<string>();
             try
             {
                 UnityEngine.Object[] dlgObjs =
@@ -988,7 +989,27 @@ namespace BphBridge
                 if (dlgObjs != null && dlgObjs.Length > 0)
                 {
                     Transform ip = World.Field(dlgObjs[0], "itemParent") as Transform;
-                    if (ip != null) dialogueChoices = ip.childCount;
+                    if (ip != null)
+                    {
+                        dialogueChoices = ip.childCount;
+                        // 三选一 / 商店的候选名：以前只有个数，agent 只能固定拿第 0 个。
+                        // 子物体是物品实例，优先读 Item2.displayName（"WOODEN SWORD"），
+                        // 拿不到就退回 GameObject 名字（会带 "(Clone)"）。
+                        for (int di = 0; di < ip.childCount && di < 16; di++)
+                        {
+                            Transform ch = ip.GetChild(di);
+                            string nm = ch == null ? "" : ch.name;
+                            Item2 chItem = null;
+                            try { if (ch != null) chItem = ch.GetComponent<Item2>(); } catch { }
+                            if (chItem == null)
+                            {
+                                try { if (ch != null) chItem = ch.GetComponentInChildren<Item2>(); } catch { }
+                            }
+                            if (chItem != null && !string.IsNullOrEmpty(chItem.displayName))
+                                nm = chItem.displayName;
+                            dialogueItems.Add(nm);
+                        }
+                    }
                 }
             }
             catch { }
@@ -1017,6 +1038,9 @@ namespace BphBridge
             w.Prop("select_item_dialogues", dialogues);
             w.Prop("select_item_finished", dialogueFinished);
             w.Prop("dialogue_choices", dialogueChoices);
+            w.Name("dialogue_items").BeginArray();
+            for (int di = 0; di < dialogueItems.Count; di++) w.Value(dialogueItems[di]);
+            w.EndArray();
             w.Prop("number_to_unlock", needUnlock);
             w.Prop("levelup_offered", lvlOffered);
             w.Prop("levelup_chosen", lvlChosen);

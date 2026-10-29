@@ -29,7 +29,9 @@ sys.path.insert(0, str(HERE.parent / "adapter"))
 
 from client import Bridge, BridgeError  # noqa: E402
 from ledger import Ledger  # noqa: E402
-from policy import Flags, choose, flags_label, score_action, set_flags  # noqa: E402
+from itemdb import ItemDB  # noqa: E402
+from policy import (Flags, choose, flags_label, pick_reward, score_action,  # noqa: E402
+                    set_flags)
 from place import place_with_room  # noqa: E402
 from mapnav import RoomGraph  # noqa: E402
 
@@ -165,6 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--focus-fire", action="store_true",
                     help="集火：能一击打死某个敌人时，按它的攻击力 × KILL_TURNS 加分"
                          "（多敌人房里减少每回合 incoming；实测每场掉血 4-14 是死因）")
+    ap.add_argument("--sustain", action="store_true",
+                    help="续航：按「有效治疗」（min(heal, max_hp-hp)）给食物/药水打分，"
+                         "腾位时不丢 sustain/relic，三选一按类别挑。默认关 = 老行为")
     ap.add_argument("--lethal-explore", dest="explore_threat", action="store_true",
                     help=argparse.SUPPRESS)   # 旧名字，等同 --explore-threat
     ap.add_argument("--record-unverified", action="store_true",
@@ -197,11 +202,17 @@ def main(argv: list[str] | None = None) -> int:
         value_energy=args.value_energy,
         value_status=args.value_status,
         focus_fire=args.focus_fire,
+        sustain=args.sustain,
     ))
     print(f"policy flags: {flags_label(flags)}")
 
     bridge = Bridge(args.runtime)
     ledger = Ledger(args.ledger)
+    # 静态道具库（903 件，data/item-catalog.json）：只有 --sustain 才用，
+    # 这样 A/B 的两组除了「续航」这一项之外完全一致。
+    itemdb = ItemDB.load() if args.sustain else None
+    if itemdb is not None:
+        print(f"itemdb: {len(itemdb)} 件（sustain {len(itemdb.by_category('sustain'))} 件）")
 
     runs_dir = HERE.parent / "data" / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -218,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
     start_fails: dict[str, int] = {}   # start_event 空操作次数（2 次就拉黑事件）
     close_map_tries = 0                # 同一次「地图开着」里试过几次 close_map
     arrivals: dict[str, int] = {}      # 每个房间到过几次（用来终结「两房间来回走」）
+    pick_moves: dict[str, int] = {}    # 同一个目标房间已经走了几步（防「磨到天荒地老」）
+    recent_rooms: list[str] = []       # 最近走过的房间（检测来回走）
     bad_uids: dict[str, Any] = {}      # uid -> 在哪个回合里失败过（只在本回合内剔除）
     level_attempt = 0
     unlock_left = args.unlock_spaces            # -1 = 自动：这次升级能点几格就点几格
@@ -248,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             bridge, base.get("uid", ""),
             name=base.get("name", "") or "",
             ledger=ledger,
+            db=itemdb,
             drops_left=drops_left,
             log=lambda s: print(f"     {s}"),
             record=record,
@@ -264,7 +278,9 @@ def main(argv: list[str] | None = None) -> int:
                              "ratio_energy": flags.ratio_energy,
                              "explore_threat": flags.explore_threat,
                              "value_energy": flags.value_energy,
-                             "value_status": flags.value_status},
+                             "value_status": flags.value_status,
+                             "focus_fire": flags.focus_fire,
+                             "sustain": flags.sustain},
             "ledger": str(ledger.path), "ledger_items": sorted(ledger.data.keys()),
             "max_steps": args.max_steps})
 
@@ -317,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
                         bad_rooms.clear()
                         bad_edges.clear()
                         arrivals.clear()
+                        pick_moves.clear()
+                        recent_rooms.clear()
                         place_skips.clear()
                         level_attempt = 0
                         nochange_streak = 0
@@ -351,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
                     st["legal"] = kept
                     print(f"     （本回合已剔除用不了的物品 {len(legal_now) - len(kept)} 个）")
 
-                action, why = choose(st, ledger, explored, flags)
+                action, why = choose(st, ledger, explored, flags, itemdb)
                 if action is None:
                     print(f"没有可做的动作：{why}")
                     break
@@ -365,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.dump_decisions:
                     cands = []
                     for a in st.get("legal") or []:
-                        sc, wy = score_action(a, st, ledger, explored, flags)
+                        sc, wy = score_action(a, st, ledger, explored, flags, itemdb)
                         cands.append({"type": a.get("type"), "uid": a.get("uid"),
                                       "score": round(sc, 3), "why": wy})
                     record({"event": "decision", "seq": st.get("seq"),
@@ -498,6 +516,8 @@ def main(argv: list[str] | None = None) -> int:
                                 bad_rooms.clear()
                                 bad_edges.clear()
                                 arrivals.clear()
+                                pick_moves.clear()
+                                recent_rooms.clear()
                                 place_skips.clear()
                                 level_attempt = 0
                                 nochange_streak = 0
@@ -600,14 +620,19 @@ def main(argv: list[str] | None = None) -> int:
             elif "close_popup" in types:
                 action = {"type": "close_popup"}
             elif ui.get("select_item_dialogues"):
-                # 战后奖励 / 事件里的「N 选 1」：桥接新增 pick_dialogue。
-                # 候选物品名还没暴露，先按顺序拿第一个；等快照带上名字再按账本挑。
+                # 战后奖励 / 事件里的「N 选 1」：桥接的 pick_dialogue。
+                # 候选名现在在 ui.dialogue_items 里（v8.22）；开了 --sustain 就按类别挑：
+                # 缺血先拿续航，否则按「输出/费用」拿最划算的。
                 n = ui.get("dialogue_choices")
+                names = ui.get("dialogue_items") or []
                 idx = 0
-                if isinstance(n, int) and n > 0:
-                    idx = 0
+                if args.sustain and isinstance(names, list) and names:
+                    hp = int((st.get("player") or {}).get("hp") or 0)
+                    max_hp = int((st.get("player") or {}).get("max_hp") or 0)
+                    idx = pick_reward([str(x) for x in names], itemdb, hp, max_hp)
                 action = {"type": "pick_dialogue", "index": idx}
-                print(f"     （N 选 1 对话框，候选 {n} 个，先拿第 {idx} 个）")
+                picked = names[idx] if isinstance(names, list) and 0 <= idx < len(names) else "?"
+                print(f"     （N 选 1 对话框，候选 {n} 个：{names}，拿第 {idx} 个 {picked}）")
             elif "level_up" in types:
                 action = {"type": "level_up"}
             elif any(a.get("type") == "place_item"
@@ -680,7 +705,8 @@ def main(argv: list[str] | None = None) -> int:
                     if arrivals.get(_room, 0) >= 2 and _ev not in blocked_events:
                         blocked_events.add(_ev)
                         print(f"     （{_room} 到过两次事件还没完成，拉黑 {_ev}）")
-                cands = [c for c in _event_rooms(st, blocked_events) if c[1] in reach]
+                cands = [c for c in _event_rooms(st, blocked_events)
+                         if c[1] in reach and c[1] not in bad_rooms]
                 pick = None
                 for prio, room_uid, ev_uid in cands:
                     if room_uid == cur:
@@ -705,6 +731,24 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"     （图上有 {len(reach) - 1} 间可达，但 legal 里没有可走的；等等看）")
                     print("没有可去的房间，结束")
                     break
+
+                # 防「同一个目标磨到天荒地老」：真机出现过在 r-56880 / r-56866 之间
+                # 来回走 85 步——目标在房间图上可达，但 legal 上永远点不到（迷雾/墙）。
+                # 连走 12 步还没到，或最近 8 步里当前房间出现 3 次（明显绕圈），
+                # 就把目标拉黑、换一个候选，别让整局停在这里。
+                recent_rooms.append(cur)
+                del recent_rooms[:-8]
+                if cur in arrivals:
+                    pick_moves.pop(cur, None)      # 已经到过的目标，计数清零
+                pick_moves[pick] = pick_moves.get(pick, 0) + 1
+                circling = recent_rooms.count(cur) >= 3
+                if pick_moves[pick] > 12 or (circling and pick_moves[pick] >= 4):
+                    bad_rooms.add(pick)
+                    print(f"     （走向 {pick} 已走 {pick_moves[pick]} 步，还在 {cur} 附近绕；"
+                          f"拉黑换目标）")
+                    pick_moves.pop(pick, None)
+                    recent_rooms.clear()
+                    continue
 
                 # 一次只走一格：整层 19 间的时候，直接点远处房间会被判定「走不到」。
                 # 迷雾里的下一格点不了时，first_step 会挑一个「能点到的邻居」先探过去。
