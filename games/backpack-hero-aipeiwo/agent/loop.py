@@ -83,6 +83,31 @@ def _scorecard(st: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _current_room_event(state: dict[str, Any]) -> dict[str, Any] | None:
+    """玩家所在房间里的那个未结束事件（没有就 None）。
+
+    `state.map.events[]` 只带 `pos`，所以用房间的 `pos` 跟它配对。
+    """
+    mp = state.get("map") or {}
+    cur = (mp.get("player") or {}).get("room_at")
+    if not cur:
+        return None
+    pos = None
+    for r in mp.get("rooms") or []:
+        if r.get("uid") == cur:
+            pos = r.get("pos")
+            break
+    if pos is None:
+        return None
+    for ev in mp.get("events") or []:
+        if ev.get("finished"):
+            continue
+        ep = ev.get("pos") or [0, 0]
+        if abs(ep[0] - pos[0]) < 0.01 and abs(ep[1] - pos[1]) < 0.01:
+            return ev
+    return None
+
+
 def _event_rooms(state: dict[str, Any], blocked: set[str] | None = None) -> list[tuple[int, str, str]]:
     """(优先级, 房间 uid, 事件 uid)。只收「未结束、看得见、有房间」的事件。
 
@@ -186,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
     bad_edges: set[tuple[str, str]] = set()   # 房间图上「看着通、实测走不通」的边
     move_from = ""                     # 上一次 move_to_room 是从哪个房间出发的
     place_skips: dict[str, int] = {}   # place_item 失败后换候选格的重试计数
+    start_fails: dict[str, int] = {}   # start_event 空操作次数（2 次就拉黑事件）
     close_map_tries = 0                # 同一次「地图开着」里试过几次 close_map
     arrivals: dict[str, int] = {}      # 每个房间到过几次（用来终结「两房间来回走」）
     bad_uids: dict[str, Any] = {}      # uid -> 在哪个回合里失败过（只在本回合内剔除）
@@ -497,6 +523,13 @@ def main(argv: list[str] | None = None) -> int:
 
             action: dict[str, Any] | None = None
 
+            # 当前房间里那个事件（以及它是不是已被判定「做不了」）。
+            # SimpleClickItem / Chance 这类「点物体」的事件，start_event 一定是空操作，
+            # 拉黑之后必须真的**不再发** start_event，否则会原地重试到判卡死。
+            _cur_ev = _current_room_event(st)
+            _cur_ev_uid = (_cur_ev or {}).get("uid") or ""
+            _cur_ev_blocked = bool(_cur_ev_uid and _cur_ev_uid in blocked_events)
+
             if "finish_level_up" in types:
                 # 实测（HANDOFF §0）：**只有** `Select()`×numberToUnlock 再 `EndLevelUp()`
                 # 真的能收掉升级界面；`ChangeSpaces` 和「只调 EndLevelUp」都会
@@ -575,9 +608,17 @@ def main(argv: list[str] | None = None) -> int:
             elif "enter_door" in types:
                 # 站在出口房间里：先去下一层，不要傻站着
                 action = next(a for a in legal if a.get("type") == "enter_door")
-            elif "start_event" in types and ui.get("viewing_top") != 1:
+            elif not _cur_ev_blocked and _cur_ev is not None and _cur_ev.get("type") == 11 \
+                    and ("start_event" in types or "play_event" in types):
+                # SimpleClickItem（地图上的「检」字块）：`start_event` 对它**永远是空操作**
+                # （E15），真正入口是 `play_event`（Play 幂等 + Click）。
+                # 真机：QuickBoost XP/Gold/HP 都是这个形状，点一下就进账。
+                action = {"type": "play_event", "uid": _cur_ev_uid}
+                print(f"     （SimpleClickItem {_cur_ev_uid}：start_event 是空操作，"
+                      f"改走 play_event）")
+            elif "start_event" in types and ui.get("viewing_top") != 1 and not _cur_ev_blocked:
                 action = next(a for a in legal if a.get("type") == "start_event")
-            elif "start_event" in types and close_map_tries < 2:
+            elif "start_event" in types and close_map_tries < 2 and not _cur_ev_blocked:
                 # 地图开着时 StartEvent 是空操作（SPIKE-08 §8）。桥接新增了 close_map
                 # （走 nonpublic 的 mapInputHandler，最后手段是直接把 viewingTop 拨回 inventory）。
                 # 但只试两次：万一这个版本不生效，就退回「拉黑这个事件、换房间」，
@@ -685,6 +726,26 @@ def main(argv: list[str] | None = None) -> int:
                       f"delta={json.dumps(ack.get('delta') or {}, ensure_ascii=False)}")
             if ack.get("error"):
                 print(f"     error={ack['error']}")
+
+            # SimpleClickItem 点不动（已经点过 / 被 travelling 挡住）：拉黑这个事件，
+            # 否则「点不开 → 换房间 → 回来再点」会来回走（和 blocked_events 同一套）。
+            if action.get("type") == "play_event" and not ack.get("changed"):
+                _ev = action.get("uid") or ((ack.get("diag") or {}).get("event") or "")
+                if _ev:
+                    blocked_events.add(_ev)
+                    print(f"     事件 {_ev} 点不动，拉黑它，换别的房间")
+
+            # `start_event` 对「靠点物体交互」的事件（SimpleClickItem / Chance 的
+            # EventNPC）永远是空操作（真机：ok=False changed=False ms=400 delta={}，
+            # relevant_event 也是 null）。连续两次就拉黑，否则整局会卡在这一格
+            # （实测 26 步时死在一次 Chance 上）。
+            if action.get("type") == "start_event" and not ack.get("changed"):
+                _ev = (_current_room_event(st) or {}).get("uid")
+                if _ev:
+                    start_fails[_ev] = start_fails.get(_ev, 0) + 1
+                    if start_fails[_ev] >= 2:
+                        blocked_events.add(_ev)
+                        print(f"     事件 {_ev} 的 start_event 连续空操作，拉黑（做不了这类事件）")
 
             # 游戏会把「实际走不到」的房间也列进 legal，对它发 move_to_room 只会
             # 30 秒超时。现在正常路径由房间图保证（见上），这里只是兜底：

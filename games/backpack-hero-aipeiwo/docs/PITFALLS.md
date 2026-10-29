@@ -436,6 +436,30 @@ GridExtension 收尾后 `grid 9 → 13`。
 - 测试钩子（`grant_spaces` / `clear_spaces` / 直接改 `numberToUnlock`）用完就
   `retry_run` 重开一局，别在污染的局里继续做验收。
 
+## E18 · `start_event` 对「点物体」的事件是空操作，循环会原地卡死
+
+**怎么发现的**：连续两次跑 `loop.py` 都停在同一类房间上：`legal` 里有 `start_event`，
+但发出去永远是 `ok=False changed=False ms=400 delta={}`；连发 4 次就被判「卡死」。
+`diag_event` 显示 `relevant_event: null`，而房间里的确有事件。
+
+**为什么**：`DungeonPlayer.StartEvent()` 走的是 `GetRelevantEvent(playerPos)`，
+它只认「触发型」事件（敌人/宝箱/门）；**靠点物体交互的两类永远是 null**：
+
+| 事件类型 | 真正入口 |
+|---|---|
+| 11 `SimpleClickItem`（QuickBoost +HP/+XP/+Gold） | `DungeonEvent.Play()` + `SimpleClickItem.Click()` → 桥接的 `play_event` |
+| 4 `Chance`（如 `Capybara Variant`，挂 `EventNPC`） | `EventNPC.OpenEvent()`（private，`OnPressMouseUpAsButton`/`OnPressStart("confirm")` 都只是调它）→ 之后弹出 `RandomEventMaster` 的随机事件 UI（**还没接**） |
+
+**以后怎么办**：
+
+- `loop.py` 现在按事件类型分流：本房间事件 `type == 11` 就发 `play_event`；
+  其它类型 `start_event` 连续两次空操作就 **`blocked_events.add(uid)`**，
+  房间选择器会跳过它（之前只拉黑不改分支，照样会重发到判卡死）。
+- `Chance` 事件目前**只能拉黑**。要用它得接着做 `EventNPC.OpenEvent()` +
+  `RandomEventMaster` 那套 UI（选项/奖励），这是一块独立的工作。
+- 判断「这格能不能开」最快的方式：`diag_event` 的 `relevant_event` 是不是 null。
+
+
 
 
 

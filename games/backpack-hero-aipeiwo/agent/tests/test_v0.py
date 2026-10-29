@@ -390,6 +390,36 @@ def test_planner_actions_never_chosen_in_battle():
     print("PASS planner actions not chosen in battle")
 
 
+def test_current_room_event():
+    """`_current_room_event`：按 pos 把事件和「玩家所在房间」配对（地图分支靠它判类型）。"""
+    from loop import _current_room_event
+
+    st = {
+        "map": {
+            "player": {"room_at": "r2"},
+            "rooms": [
+                {"uid": "r1", "pos": [0, 1.5]},
+                {"uid": "r2", "pos": [1, 1.5]},
+            ],
+            "events": [
+                {"uid": "d1", "type": 4, "pos": [0, 1.5], "finished": False},
+                {"uid": "d2", "type": 11, "pos": [1.0, 1.5], "finished": False},
+                {"uid": "d3", "type": 11, "pos": [1, 1.5], "finished": True},
+            ],
+        }
+    }
+    ev = _current_room_event(st)
+    assert ev and ev["uid"] == "d2", ev          # 只认本房间且未结束的
+
+    # 事件都结束了 -> None（循环会去走房间，而不是发 start_event）
+    st["map"]["events"][1]["finished"] = True
+    assert _current_room_event(st) is None
+
+    # 房间/事件缺失也不能炸
+    assert _current_room_event({"map": {}}) is None
+    print("PASS current room event")
+
+
 if __name__ == "__main__":
     test_ledger()
     test_policy_explore_then_known()
@@ -408,6 +438,7 @@ if __name__ == "__main__":
     test_absorbed()
     test_ledger_absorbed()
     test_planner_actions_never_chosen_in_battle()
+    test_current_room_event()
 
     # 背包 planner 的自测也一起跑（纯函数，不需要游戏）
     from test_backpack import main as backpack_tests
