@@ -322,6 +322,11 @@ def main(argv: list[str] | None = None) -> int:
                 break
 
             # ---------------- 战斗 / 整理 ----------------
+            # 「点了、但状态这一帧看不出变化」的动作（典型：升级界面点 GridExtension，
+            # 格子数要等 finish_level_up 才 +N）。这类动作不能算进「卡死」计数，
+            # 否则点 4 次扩容就把自己判定成卡死（真机 39 步时踩到）。
+            deferred_ok = False
+
             if mode in ("battle", "reorganize"):
                 if not st.get("legal"):
                     print("  等玩家回合（legal 为空）")
@@ -427,6 +432,9 @@ def main(argv: list[str] | None = None) -> int:
                     _clicked = _d.get("clicked")
                     _clicked = _clicked if isinstance(_clicked, int) else 0
                     unlock_left = max(0, unlock_left - _clicked)
+                    # 点格子这一帧看不出变化（grid 要等 finish_level_up 才 +N），
+                    # 别让它被算进「卡死」计数。
+                    deferred_ok = deferred_ok or _clicked > 0
                     print(f"     （扩容：点了 {_clicked} 个格子 -> grid "
                           f"{_d.get('grid_squares_before')}→{_d.get('grid_squares_after')}，"
                           f"剩余配额 {unlock_left}）")
@@ -443,6 +451,10 @@ def main(argv: list[str] | None = None) -> int:
                     place_skips.pop(action.get("uid", ""), None)
                 if action.get("type") == "place_item" and not ack.get("changed"):
                     uid = action.get("uid", "")
+                    # 摆不进去是**可恢复**的失败：换候选格 / 记进 explored 就完事，
+                    # 不该计入「卡死」。否则两件放不进去的战利品就能把整局判死
+                    # （真机 167 步时踩到：cell 1,0 footprint hits occupied 1,-1）。
+                    deferred_ok = True
                     if place_skips.get(uid, 0) < 1:
                         # 桥接会按形状挑候选格；第一个候选失败时换下一个再试一次。
                         place_skips[uid] = place_skips.get(uid, 0) + 1
@@ -490,7 +502,8 @@ def main(argv: list[str] | None = None) -> int:
                                 continue
                             print(f"     retry_run 没生效（{ack2.get('error')}），继续重试")
 
-                nochange_streak = 0 if ack.get("changed") else nochange_streak + 1
+                nochange_streak = 0 if (ack.get("changed") or deferred_ok) \
+                    else nochange_streak + 1
                 if nochange_streak >= MAX_CONSECUTIVE_NOCHANGE:
                     print("!! 连续多次没变化，判定卡死，停")
                     record({"event": "stuck", "streak": nochange_streak})
@@ -766,6 +779,7 @@ def main(argv: list[str] | None = None) -> int:
                 _clicked = _d.get("clicked")
                 _clicked = _clicked if isinstance(_clicked, int) else 0
                 unlock_left = max(0, unlock_left - _clicked)
+                deferred_ok = deferred_ok or _clicked > 0
                 print(f"     （扩容：点了 {_clicked} 个格子 -> grid "
                       f"{_d.get('grid_squares_before')}→{_d.get('grid_squares_after')}，"
                       f"剩余配额 {unlock_left}）")
@@ -782,6 +796,7 @@ def main(argv: list[str] | None = None) -> int:
                 place_skips.pop(action.get("uid", ""), None)
             if action.get("type") == "place_item" and not ack.get("changed"):
                 uid = action.get("uid", "")
+                deferred_ok = True          # 可恢复失败，不算卡死（见战斗分支的注释）
                 if place_skips.get(uid, 0) < 1:
                     place_skips[uid] = place_skips.get(uid, 0) + 1
                     print("     摆放失败（形状/遮挡），下一轮换候选格再试一次")
@@ -794,7 +809,8 @@ def main(argv: list[str] | None = None) -> int:
                         "delta": ack.get("delta"), "receipt": ack.get("receipt"),
                         "error": ack.get("error")})
 
-            nochange_streak = 0 if ack.get("changed") else nochange_streak + 1
+            nochange_streak = 0 if (ack.get("changed") or deferred_ok) \
+                else nochange_streak + 1
             if nochange_streak >= MAX_CONSECUTIVE_NOCHANGE:
                 print("!! 连续多次没变化，判定卡死，停")
                 record({"event": "stuck", "streak": nochange_streak})

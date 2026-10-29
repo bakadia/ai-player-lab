@@ -459,6 +459,28 @@ GridExtension 收尾后 `grid 9 → 13`。
   `RandomEventMaster` 那套 UI（选项/奖励），这是一块独立的工作。
 - 判断「这格能不能开」最快的方式：`diag_event` 的 `relevant_event` 是不是 null。
 
+## E19 · 「预期内的无变化」不能算进卡死计数
+
+**怎么发现的**：跑存活基线时，loop 两次在明明有进展的情况下打印
+`!! 连续多次没变化，判定卡死，停`：
+
+1. **扩容**：升级界面每点一个 GridExtension，`grid_squares` 要等 `finish_level_up`
+   才 +N，所以每次 `unlock_spaces` 都是 `ok=False changed=False`。点 4 次正好凑满
+   `MAX_CONSECUTIVE_NOCHANGE = 4` → 第 31 步就"卡死"。
+2. **摆放**：两件放不进去的战利品各失败两次（`cell 1,0 footprint hits occupied 1,-1`）
+   → 4 次 no-change → 第 167 步"卡死"。
+
+**为什么坑**：`nochange_streak` 的本意是抓「这条动作在这个状态下永远不会生效」，
+但**延迟生效**（格子数延后）和**可恢复失败**（换一格再放）都长得跟它一样：
+`changed=False`。
+
+**以后怎么办**：
+
+- 新增 `deferred_ok` 标记：动作的 ack 虽然是 `changed=False`，但**分支自己知道有进展**
+  （`diag.clicked > 0`、摆放失败已记进 `explored`/`place_skips`），就把 streak 清零。
+- 判断标准不是「ack.changed」，而是「这一步之后我还剩不剩新东西可试」。
+- 以后再加新动作时先问一句：它的效果是**这一帧可见**的吗？不是的话就得走 `deferred_ok`。
+
 
 
 

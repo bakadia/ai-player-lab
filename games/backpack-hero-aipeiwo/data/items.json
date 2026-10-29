@@ -1,5 +1,22 @@
 {
   "items": {
+    "ACIDIC POTION": {
+      "block_sum": 0,
+      "damage_sum": 21,
+      "effects": {},
+      "samples": 1
+    },
+    "CLEANSING BOMB": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 1
+    },
     "COCONUT DRINK": {
       "block_sum": 0,
       "damage_sum": 0,
@@ -35,6 +52,18 @@
       },
       "samples": 1
     },
+    "MACHETE": {
+      "absorbed_sum": 3,
+      "block_sum": 0,
+      "damage_sum": 9,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 2,
+          "sum": 2.0
+        }
+      },
+      "samples": 2
+    },
     "MEAL": {
       "block_sum": 0,
       "damage_sum": 0,
@@ -54,10 +83,21 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 364,
+      "block_sum": 980,
       "damage_sum": 0,
       "effects": {},
-      "samples": 52
+      "samples": 139
+    },
+    "SMELT": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "status:haste:player": {
+          "count": 1,
+          "sum": 8.0
+        }
+      },
+      "samples": 1
     },
     "SPOILED MILK": {
       "block_sum": 36,
@@ -65,24 +105,24 @@
       "samples": 2
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 291,
+      "absorbed_sum": 455,
       "block_sum": 0,
-      "damage_sum": 2035,
+      "damage_sum": 2788,
       "effects": {
         "gold": {
           "count": 1,
           "sum": 5.0
         },
         "status:fire:player": {
-          "count": 1,
-          "sum": 1.0
+          "count": 3,
+          "sum": 5.0
         },
         "status:rage:enemy": {
-          "count": 27,
-          "sum": 27.0
+          "count": 38,
+          "sum": 38.0
         }
       },
-      "samples": 370
+      "samples": 515
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
