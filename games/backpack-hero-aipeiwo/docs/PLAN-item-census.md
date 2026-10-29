@@ -104,7 +104,7 @@ status_inflicted[], status_self[], cells, cost, rarity, types[]
 ## 4. 会话内的里程碑（做完就打勾）
 
 - [x] M1 `dump_item_catalog` 跑通，`runtime/item-catalog.json` 落盘（含枚举表）
-- [ ] M2 分类器跑通：`unknown` 占比 < 20%，账本交叉验证偏差清单出来
+- [x] M2 分类器跑通：`unknown` 占比 < 20%，账本交叉验证偏差清单出来
 - [ ] M3 `--sustain` 接进 policy + 单测（满血不浪费、濒死不乱用）
 - [ ] M4 真机 A/B 2 局，掉血/楼层有数（写进 RESULT）
 
@@ -158,3 +158,46 @@ status_inflicted[], status_self[], cells, cost, rarity, types[]
   「每回合给护甲」就靠这一层区分。
 - 已实测的形状样例：木剑 `combat_effects[0].effect = {type:0(Damage), value:7, target:2(enemy)}`，
   圆盾 `{type:1(Block), value:7, target:1(player)}`，苹果 `{type:2(HP), value:5}`。
+
+## 7. Step 2 也已完成（`agent/itemdb.py`）——分类器实际长这样
+
+`python agent/itemdb.py [--write]` 输出类别分布 / 续航榜 / 每回合收益 / 账本交叉验证，
+`--write` 生成 `data/items-unknown.md`。测试：`python agent/tests/test_itemdb.py`。
+
+**实际分布（903 件）**：
+
+| 类别 | 件数 | 占比 |
+|---|---|---|
+| attack | 212 | 23.5% |
+| utility | 157 | 17.4% |
+| support | 118 | 13.1% |
+| relic | 95 | 10.5% |
+| status | 91 | 10.1% |
+| defense | 87 | 9.6% |
+| energy | 56 | 6.2% |
+| unknown | 54 | **6.0%**（目标 <20%） |
+| sustain | 33 | 3.7% |
+
+**计划外新增 `support` 类别**：`modifiers[]` / `addModifiers[]` 改的是**别的**道具
+（例：KNIGHT'S ARMOR 自己每回合 6 甲，另给相邻 Armor/Shield +2）。
+第一版把它们算进自己的输出，导致 337 件都成了 support、骑士甲变成 8 甲/回合；
+拆开后才对。`ItemStats` 因此多了 `damage_active`（只算 onUse/onCombo 这类**立刻结算**的）、
+`support_damage` / `support_block`（给别人的）、以及 `reactive` 标签。
+
+**账本交叉验证**（样本 >= 5 的只有 3 件）：
+
+| 物品 | 样本 | 静态伤 | 实测伤 | 偏差 | 静态挡 | 实测挡 | 偏差 |
+|---|---|---|---|---|---|---|---|
+| WOODEN SWORD | 623 | 7.0 | 5.41 | **-23%** | 0 | 0 | - |
+| ROUGH BUCKLER | 178 | 0 | 0 | - | 7.0 | 7.04 | **+1%** |
+| MEAL | 5 | 0 | 0 | - | 0 | 0 | - |
+
+木剑 -23% 不是分类器错：账本记的是**净伤害**（被格挡吃掉的部分另记 `absorbed_sum`）。
+所以这条交叉验证能证明「护甲类完全对得上」，伤害类要按 `(damage+absorbed)/samples` 再比。
+
+**Step 3 要注意的两件事**：
+
+1. 续航不能只看名字：`sustain` 33 件里 20 件是 0 费食物（heal 2–20），
+   但 GEMSTONE HEART（heal 8）挂在 `onKillNonSummonEnemy` 上，不是想用就用。
+2. `unknown` 54 件集中在 Accessory/Component/Core——它们的数字效果在
+   `ScriptedTrigger` / 组件脚本里，prefab 上确实没有 `Effect`；`data/items-unknown.md` 里可人工过。

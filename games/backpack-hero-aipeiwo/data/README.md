@@ -64,6 +64,13 @@
 
 用法：`{v: k for k, v in types["Item2+Effect+Type"].items()}` 得到 `整数 -> 名字`。
 
+## `items-unknown.md` — 分类器判不出来的道具
+
+`python agent/itemdb.py --write` 生成：分类器（`agent/itemdb.py`）在 prefab 上
+找不到任何 `Effect`、也没有可解析的 modifier 的道具（当前 54 件，集中在
+Accessory / Component / Core）。它们的数字效果在 `ScriptedTrigger` / 组件脚本里，
+**不适合硬猜**；这张表是给人过一遍的，过完再决定补别名还是归 `utility`。
+
 ## `runs/` — 每局回放
 
 `run.py` / `loop.py` 写的 JSONL，一行一个事件（`decide` / `act` / `map` / `dead` / `retry` / `stuck` / `end`）。

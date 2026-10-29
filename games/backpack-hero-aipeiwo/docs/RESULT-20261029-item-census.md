@@ -80,15 +80,44 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\bridge\build.ps1
 tools\bph.cmd stop ; tools\bph.cmd start
 ```
 
-## 6. 下一步（Step 2/3/4）
+## 6. Step 2：分类器 `agent/itemdb.py`（M2）
 
-1. **Step 2 分类器 `agent/itemdb.py`**：用 `data/enums.json` 把整数翻成名字，
-   递归找 `$type == "Effect"` 派生 `damage/hits/block/block_per_turn/heal/max_hp_gain/status_*`；
-   主类别 `sustain`（HP/MaxHP/MaxHPPassive）/ `defense` / `attack` / `energy` / `status` /
-   `relic` / `utility`；`unknown` 进 `data/items-unknown.md`。
-   注意：**治疗要看 target**，`HP +5 target=10` 是自愈，`target=3(allEnemies)` 才是伤害；
-   负值（`CHARMED BRACELET -5`）是诅咒/代价，别当治疗。
-2. **交叉验证**：`data/items.json` 的实测均伤/均格挡 vs 目录静态值，偏差 > 30% 列清单。
-3. **Step 3 `--sustain`**：`heal = min(heal, max_hp - hp) × W`；满血 0 分；
-   `block_per_turn` 按剩余回合折现；丢弃优先级按类别；三选一/商店按类别挑。
-4. **Step 4 真机 A/B**：`bph_xp_curve.py --stop-on-dead` 各 2 局，看每场掉血/最深楼层/等级。
+```text
+道具总数 903；类别（互斥）:
+  attack 212 (23.5%)  utility 157 (17.4%)  support 118 (13.1%)  relic 95 (10.5%)
+  status  91 (10.1%)  defense  87 ( 9.6%)  energy   56 ( 6.2%)
+  unknown 54 ( 6.0%)  sustain  33 ( 3.7%)
+unknown 占比 6.0%（目标 < 20%）
+```
+
+- 标签：`rare=351, support=234, consumable=170, relic=113, reactive=65, aoe=35,
+  per_turn=32, curse=28, self_harm=21`。
+- 续航榜：POULTICE / SALAMI 20，SUNTAN LOTION 12，BANANAS/CANDY APPLE 等 10。
+- 每回合护甲：PLATE ARMOR 8，STUMP HAZARD 7，BIRD CHANT / KNIGHT'S ARMOR 6。
+- 交叉验证（样本 ≥5 的 3 件）：WOODEN SWORD -23%（净伤害口径，见下）、
+  ROUGH BUCKLER +1%、MEAL 无伤害。偏差 >30% 的 0 条。
+
+三个实现上的关键决定：
+
+1. **`modifiers[]` 不是自己的效果**。它改的是别的道具（骑士甲自己 6 甲/回合，
+   另给相邻 Armor/Shield +2）。第一版混算 → 337 件都成 support、骑士甲 8 甲/回合。
+   拆开后新增 `support` 类别和 `support_damage` / `support_block`。
+2. **`damage_active` vs `damage`**。`reactive`（onKill / whenAttacked / onTurnStart）
+   的伤害不能当成「用一下就打」；Step 3 打分要用 `damage_active`。
+3. **`data/items.json` 记的是净伤害**，所以木剑 -23% 是正常的（被格挡的部分在
+   `absorbed_sum`）。护甲类对得上（+1%），说明分类器没把数值抄错。
+
+测试：`python agent/tests/test_itemdb.py`（9 项 ALL PASS，含枚举锚点、名字容错）。
+
+## 7. 下一步（Step 3 / 4，还没开始）
+
+1. **Step 3 `--sustain` 接进 policy**（默认关）：
+   - 治疗：`heal = min(stats.heal, max_hp - hp) × SUSTAIN_WEIGHT`，满血 0 分；
+     用 `damage_active` / `block_active` 的那种「立刻结算」口径，别把 `onKill` 的回血当随时可用。
+   - 每回合护甲（`block_per_turn`）按「预计还剩几回合」折现，别按回合数无脑乘。
+   - 丢弃优先级：`sustain` / `relic` 不丢；`attack` 里低于均值的先丢；`support` 看是否还有人可辅。
+   - 三选一 / 商店：`pick_dialogue` 有候选名后按类别挑（现在固定第 0 个）。
+   - 单测：满血不浪费、濒死不乱用、0 费食物优先于 1 费攻击。
+2. **Step 4 真机 A/B**：`bph_xp_curve.py --stop-on-dead` 各 2 局，
+   对比「每场掉血 / 最深楼层 / 等级」，结果写进新的 RESULT。
+
