@@ -6,6 +6,7 @@
 > **按朝向搜落点**（4 朝向 × 所有空格，`probe_fit` 一次拿全表）。
 >
 > 桥接 **v8.15**：**117,760 bytes，SHA256 `B162071B…`**（已部署，见 §6）。
+> 提交：**`6540d33`**。
 > `bridge/tests/run-tests.ps1`、`agent/tests/test_v0.py`、
 > `agent/tests/test_backpack.py` 全 ALL PASS。
 
