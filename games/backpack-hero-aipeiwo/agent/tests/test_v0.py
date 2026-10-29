@@ -357,6 +357,39 @@ def test_ledger_absorbed():
         print("PASS ledger absorbed")
 
 
+def test_planner_actions_never_chosen_in_battle():
+    """腾位动作（挪/转/换/丢）不进战斗决策：丢东西不可逆，只能由 planner 发。"""
+    from policy import choose
+
+    led = Ledger(Path(tempfile.gettempdir()) / "_bph_nonexistent.json")
+    st = {
+        "mode": "battle",
+        "battle_phase": 1,
+        "player": {"hp": 40, "energy": 3},
+        "enemies": [{"uid": "e1", "hp": 30, "max_hp": 30, "attacks": []}],
+        "backpack": {"items": [{"uid": "i2", "name": "Buckler", "energy_cost": 0}]},
+        "legal": [
+            {"type": "drop_item", "uid": "i2", "name": "Buckler"},
+            {"type": "move_item", "uid": "i2"},
+            {"type": "rotate_item", "uid": "i2"},
+            {"type": "swap_items", "a": "i2", "b": "i3"},
+            {"type": "end_turn"},
+        ],
+    }
+    act, why = choose(st, led, set())
+    # 战斗里只剩腾位动作和 end_turn -> 必须结束回合，不能去丢东西
+    assert act["type"] == "end_turn", (act, why)
+
+    # 有战利品可捡时会去捡（LOOT_SCORE 高于一切普通动作）
+    st2 = dict(st)
+    st2["legal"] = list(st["legal"]) + [
+        {"type": "place_item", "uid": "i9", "name": "Loot", "needs": 1, "free": 2},
+    ]
+    act, why = choose(st2, led, set())
+    assert act["type"] == "place_item", (act, why)
+    print("PASS planner actions not chosen in battle")
+
+
 if __name__ == "__main__":
     test_ledger()
     test_policy_explore_then_known()
@@ -374,4 +407,10 @@ if __name__ == "__main__":
     test_damage_from_delta()
     test_absorbed()
     test_ledger_absorbed()
+    test_planner_actions_never_chosen_in_battle()
+
+    # 背包 planner 的自测也一起跑（纯函数，不需要游戏）
+    from test_backpack import main as backpack_tests
+    backpack_tests()
+
     print("ALL PASS")

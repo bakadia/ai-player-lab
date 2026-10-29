@@ -151,6 +151,14 @@ namespace BphBridge
                     if (pc.TimeoutMs < 10000) pc.TimeoutMs = 10000;
                 }
 
+                // 互换：A 最后落位，用它当验收（B 在 A 之前就位，动作抛错会立即回执）
+                if (atype == "swap_items")
+                {
+                    pc.PlaceUid = MiniJson.Str(pc.Action, "a", "");
+                    pc.WaitInBag = true;
+                    if (pc.TimeoutMs < 10000) pc.TimeoutMs = 10000;
+                }
+
                 pc.WaitLooseAbove = atype == "open_chest";
                 if (pc.WaitLooseAbove)
                 {

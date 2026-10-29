@@ -915,6 +915,106 @@ namespace BphBridge
         }
 
         /// <summary>
+        /// 「已经被占的格子」，**以 gridPositions 为唯一事实**，可以排除一两个物品。
+        ///
+        /// 为什么要这个而不是 `SquareOpen`：`containsItem` 会滞后。move/swap 的中间态
+        /// （A 已经被 StartDrag 摘下来、B 还没落位）用 `SquareOpen` 会把 A 的旧格子
+        /// 当成占用，于是「B 的旧格也算空」这件事就没法表达。排除 uid 之后，
+        /// 占用集合只由「还在背包里、且有 cells 的物品」决定，和 RefreshOccupancy 一致。
+        /// </summary>
+        public static HashSet<string> OccupiedCells(string exceptUidA, string exceptUidB)
+        {
+            HashSet<string> used = new HashSet<string>();
+            try
+            {
+                List<Item2> items = World.ItemsInGrid();
+                if (items == null) return used;
+                for (int i = 0; i < items.Count; i++)
+                {
+                    Item2 it = items[i];
+                    if (it == null) continue;
+                    if (!World.IsPlaced(it)) continue;
+                    string uid = "i" + it.GetInstanceID();
+                    if (uid == exceptUidA || uid == exceptUidB) continue;
+                    List<string> cells = ItemCells(it);
+                    for (int c = 0; c < cells.Count; c++) used.Add(cells[c]);
+                }
+            }
+            catch { }
+            return used;
+        }
+
+        /// <summary>footprint 是否整块落在背包里、且不和 `occupied` 相交。返回 null 表示合法。</summary>
+        public static string CheckFootprint(List<Vector2Int> fp, HashSet<string> bag,
+                                            HashSet<string> occupied)
+        {
+            if (fp == null || fp.Count == 0) return "cannot compute footprint";
+            if (bag == null || bag.Count == 0) return "bag is empty (no grid squares)";
+            for (int i = 0; i < fp.Count; i++)
+            {
+                string key = fp[i].x + "," + fp[i].y;
+                if (!bag.Contains(key)) return "footprint leaves bag at " + key;
+                if (occupied != null && occupied.Contains(key)) return "footprint hits occupied " + key;
+            }
+            return null;
+        }
+
+        /// <summary>把物品的朝向设成绝对角度（度），只写 transform，不动 startRotation。</summary>
+        public static void RotateItemTo(ItemMovement im, int deg)
+        {
+            if (im == null) return;
+            try { im.transform.eulerAngles = new Vector3(0f, 0f, deg); } catch { }
+        }
+
+        /// <summary>物品要占几格（形状面积；旋转不改变它，只影响 footprint 的摆法）。</summary>
+        public static int SpacesNeeded(Item2 it, ItemMovement im)
+        {
+            if (im == null)
+            {
+                try { im = it == null ? null : it.GetItemMovement(); } catch { }
+            }
+            if (im == null) return -1;
+            try { return im.GetSpacesNeeded(); } catch { return -1; }
+        }
+
+        /// <summary>被动饰品（Item2+ItemType.Relic = 22）。丢弃时优先避开它们。</summary>
+        public static bool IsRelicItem(Item2 it)
+        {
+            if (it == null) return false;
+            try
+            {
+                List<Item2.ItemType> types = it.itemType;
+                if (types == null) return false;
+                for (int i = 0; i < types.Count; i++)
+                {
+                    if ((int)types[i] == 22) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>使用要花多少金币（Item2+Cost+Type: energy=0, mana=1, gold=2）。</summary>
+        public static int ItemGoldCost(Item2 it)
+        {
+            if (it == null) return 0;
+            int gold = 0;
+            try
+            {
+                List<Item2.Cost> costs = it.costs;
+                if (costs == null) return 0;
+                for (int i = 0; i < costs.Count; i++)
+                {
+                    Item2.Cost c = costs[i];
+                    if (c == null) continue;
+                    if ((int)c.type == 2) gold += c.currentValue;
+                }
+            }
+            catch { }
+            return gold;
+        }
+
+        /// <summary>
         /// 按物品当前形状，找出背包里所有放得下的落点（transform 目标坐标）
         /// `extraFree` 里的格子当作空（move_item 挪走自己时，旧格子就是这个状态）
         /// </summary>
@@ -1352,6 +1452,14 @@ namespace BphBridge
                 return;
             }
 
+            // 只读几何探针：4 个朝向 × 每个背包格子的 footprint 表。
+            // 「按朝向找落点」「swap / 腾位」都靠这张表在 agent 侧做搜索（见 agent/backpack.py）。
+            if (type == "probe_fit")
+            {
+                ProbeFitAction(pc);
+                return;
+            }
+
             // 扩容：升级界面的「加格子」入口是点 GridExtension，不是 ChangeSpaces。
             // IL
             //   GridExtension.Click -> levelUpManager.Select() -> ChangeSpaces(-1) + SetupSpaces()
@@ -1698,6 +1806,12 @@ namespace BphBridge
                 // 现在用物品自己的 collider 形状算出「放到这个格子会占哪些格」，
                 // 再检查这些格子是否都空着。skip 用于失败后换下一个候选。
                 string placeVia = MiniJson.Str(pc.Action, "via", "start");
+                // 朝向：`rot_deg` 是**绝对**角度（0/90/180/270），由 agent 的 planner 指定。
+                // 有了它，「按朝向找落点」就是把同一张 probe_fit 表里某个朝向的 footprint
+                // 原样发回来，预测和落点不会再有偏差。不给就沿用当前朝向。
+                int rotDeg = (int)MiniJson.Num(pc.Action, "rot_deg", int.MinValue);
+                if (rotDeg != int.MinValue) RotateItemTo(im, rotDeg);
+
                 int skip = (int)MiniJson.Num(pc.Action, "skip", 0);
                 if (skip < 0) skip = 0;
 
@@ -1731,7 +1845,33 @@ namespace BphBridge
                 if (placeGrid == null && placeVia != "drag")
                     throw new InvalidOperationException("no GridObject on " + placeUid + " (shape unknown)");
                 List<Vector3> fitTargets = new List<Vector3>();
-                if (placeGrid != null && placeVia != "drag")
+
+                // 显式落点优先：`cell`（格子坐标，和 state 里的 cells 同一套）+ 上面的 `rot_deg`。
+                // 验收教程 3 件 / 13 格时用它，不用赌游标；agent 的 planner 也走这条。
+                // 先于「按形状扫空格」处理，否则满包时连指定落点都会被 "no fitting cell" 拦掉。
+                string wantCell = MiniJson.Str(pc.Action, "cell", "");
+                if (wantCell.Length > 0)
+                {
+                    Vector2Int wc;
+                    if (!TryParseCell(wantCell, out wc))
+                        throw new InvalidOperationException("bad cell: " + wantCell);
+                    GridSquare wgs = BagSquareAt(wc);
+                    if (wgs == null)
+                        throw new InvalidOperationException("no bag square at " + wantCell);
+
+                    target = wgs.transform.position;
+                    hasTarget = true;
+
+                    // 异形物品：整块 footprint 都要在包里、且都空着
+                    List<Vector2Int> want = placeGrid == null
+                        ? null : PredictCells(im, placeGrid, target);
+                    HashSet<string> occ = OccupiedCells(placeUid, null);
+                    string badCell = CheckFootprint(want, BagCellSet(), occ);
+                    if (badCell != null)
+                        throw new InvalidOperationException("cell " + wantCell + " -> " + badCell);
+                }
+
+                if (!hasTarget && placeGrid != null && placeVia != "drag")
                 {
                     Dictionary<string, GridSquare> openByCell = new Dictionary<string, GridSquare>();
                     for (int i = 0; i < openSquares.Count; i++)
@@ -1773,18 +1913,19 @@ namespace BphBridge
                 // 连续放多件时轮转，避免都塞进第一个空格（实测 4 件全叠在 10,2）
                 int pick = skip > 0 ? skip : _placeCursor++;
 
-                if (fitCount > 0)
+                // 指定了 cell 就别再猜落点（上面已经验证过 footprint）
+                if (!hasTarget && fitCount > 0)
                 {
                     target = fitTargets[pick % fitCount];
                     hasTarget = true;
                 }
-                else if (openSquares.Count > 0)
+                else if (!hasTarget && openSquares.Count > 0)
                 {
                     // 形状算不出来（老物品/异常）：按游标轮转空格盲试。
                     target = openSquares[pick % openSquares.Count].transform.position;
                     hasTarget = true;
                 }
-                else
+                else if (!hasTarget)
                 {
                     try
                     {
@@ -1808,41 +1949,6 @@ namespace BphBridge
                     throw new InvalidOperationException(
                         "no fitting cell (freeGridSquares=" + freeSquares +
                         " fitShape=" + fitCount + " findGridSpaces=" + spaceCount + ")");
-
-                // 显式钉死落点：cell="0,1"（格子坐标，和 state 里的 cells 同一套）。
-                // 验收教程 3 件 / 13 格时用它，不用赌游标。
-                string wantCell = MiniJson.Str(pc.Action, "cell", "");
-                if (wantCell.Length > 0)
-                {
-                    Vector2Int wc;
-                    if (!TryParseCell(wantCell, out wc))
-                        throw new InvalidOperationException("bad cell: " + wantCell);
-                    GridSquare wgs = BagSquareAt(wc);
-                    if (wgs == null)
-                        throw new InvalidOperationException("no bag square at " + wantCell);
-                    if (!SquareOpen(wgs))
-                        throw new InvalidOperationException("cell occupied: " + wantCell);
-                    target = wgs.transform.position;
-                    hasTarget = true;
-
-                    // 异形物品：目标格空不代表整块 footprint 都空
-                    List<Vector2Int> want = PredictCells(im, placeGrid, target);
-                    if (want != null && want.Count > 0)
-                    {
-                        HashSet<string> bag = BagCellSet();
-                        for (int c = 0; c < want.Count; c++)
-                        {
-                            string key = want[c].x + "," + want[c].y;
-                            if (!bag.Contains(key))
-                                throw new InvalidOperationException(
-                                    "cell " + wantCell + " -> footprint leaves bag at " + key);
-                            GridSquare fs = BagSquareAt(want[c]);
-                            if (fs == null || !SquareOpen(fs))
-                                throw new InvalidOperationException(
-                                    "cell " + wantCell + " -> footprint hits occupied " + key);
-                        }
-                    }
-                }
 
                 if (placeVia == "look")
                 {
@@ -1914,7 +2020,7 @@ namespace BphBridge
                     im.StartDrag();
                     if (!im.isDragging)
                         throw new InvalidOperationException(
-                            "StartDrag refused: isDragging=false (dead/phase/isStoppingDrag?)");
+                            "StartDrag refused: " + StartDragBlocked(im));
 
                     im.transform.position = target;
                     Vector3 snapPos = im.transform.position;
@@ -1966,6 +2072,14 @@ namespace BphBridge
             if (type == "move_item" || type == "rotate_item" || type == "drop_item")
             {
                 MoveRotateDropAction(pc, type);
+                return;
+            }
+
+            // 两件互换：一条动作里完成「摘下 A → B 进 A 的旧格 → A 进 B 的旧格」，
+            // 中间态（A 的旧格算空）只有在这一条动作内部才存在。见 SwapItemsAction。
+            if (type == "swap_items")
+            {
+                SwapItemsAction(pc);
                 return;
             }
 
@@ -2285,6 +2399,155 @@ namespace BphBridge
         }
 
         /// <summary>
+        /// 只读几何探针：把一件（或全部）物品在 4 个朝向下、每个背包格子上的 footprint
+        /// 一次性吐出来。
+        ///
+        /// 为什么要这样一个动作：`PredictCells` 只有在游戏里跑得动（要 collider + transform），
+        /// 所以「4 朝向 × 所有空格」的搜索放在 C# 里每次都要现场算上百次，放在 agent 侧
+        /// 又得一个格子问一次。这里一次把整张表吐出来，agent 拿纯数据做搜索（可以离线单测），
+        /// 再把选中的 `{cell, rot_deg}` 发回 `place_item` / `move_item`。
+        ///
+        /// 只保留「整块 footprint 都在背包里」的落点——包外的永远不可用。
+        /// 形状相同的朝向（矩形 collider 的 0°/180°、90°/270°）只留角度最小的那个。
+        /// </summary>
+        private static void ProbeFitAction(PendingCommand pc)
+        {
+            string uidWanted = MiniJson.Str(pc.Action, "uid", "");
+
+            HashSet<string> bag = BagCellSet();
+            List<GridSquare> squares = null;
+            try { squares = GridSquare.allGrids; } catch { }
+
+            List<Item2> items = new List<Item2>();
+            if (uidWanted.Length > 0)
+            {
+                Item2 one = FindItem(uidWanted);
+                if (one == null) throw new InvalidOperationException("item not found: " + uidWanted);
+                items.Add(one);
+            }
+            else
+            {
+                List<Item2> inGrid = World.ItemsInGrid();
+                if (inGrid != null)
+                {
+                    for (int i = 0; i < inGrid.Count && items.Count < 12; i++)
+                    {
+                        if (inGrid[i] == null || !World.IsPlaced(inGrid[i])) continue;
+                        items.Add(inGrid[i]);
+                    }
+                }
+                List<Item2> loose = World.ItemsLoose();
+                if (loose != null)
+                {
+                    for (int i = 0; i < loose.Count && items.Count < 12; i++)
+                    {
+                        if (loose[i] == null) continue;
+                        items.Add(loose[i]);
+                    }
+                }
+            }
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("bag_parent", BagParentName());
+            w.Prop("grid_squares", squares == null ? -1 : squares.Count);
+            w.Prop("free_squares", CountFreeSquares());
+            w.Name("bag").BeginArray();
+            foreach (string cell in bag) w.Value(cell);
+            w.EndArray();
+
+            w.Name("items").BeginArray();
+            for (int idx = 0; idx < items.Count; idx++)
+            {
+                Item2 it = items[idx];
+                string uid = "i" + ObjId(it);
+                ItemMovement im = null;
+                try { im = it.GetItemMovement(); } catch { }
+                GridObject go = ResolveGridObject(it, im);
+
+                int euler0 = 0;
+                if (im != null)
+                {
+                    try
+                    {
+                        euler0 = ((int)Mathf.Round(im.transform.eulerAngles.z) % 360 + 360) % 360;
+                    }
+                    catch { }
+                }
+
+                w.BeginObject();
+                w.Prop("uid", uid);
+                w.Prop("name", it.displayName == null ? "" : it.displayName);
+                w.Prop("in_bag", ItemInBag(uid));
+                w.Prop("needs", SpacesNeeded(it, im));
+                w.Prop("euler", euler0);
+                w.Name("cells").BeginArray();
+                List<string> mine = ItemCells(it);
+                for (int i = 0; i < mine.Count; i++) w.Value(mine[i]);
+                w.EndArray();
+
+                w.Name("rotations").BeginArray();
+                if (im != null && go != null && squares != null)
+                {
+                    HashSet<string> seen = new HashSet<string>();
+                    for (int r = 0; r < 4; r++)
+                    {
+                        int deg = r * 90;
+                        RotateItemTo(im, deg);
+
+                        List<string> anchors = new List<string>();
+                        List<string> footprints = new List<string>();
+                        System.Text.StringBuilder sig = new System.Text.StringBuilder();
+                        for (int s = 0; s < squares.Count; s++)
+                        {
+                            GridSquare gs = squares[s];
+                            if (gs == null) continue;
+                            List<Vector2Int> fp = PredictCells(im, go, gs.transform.position);
+                            if (fp == null || fp.Count == 0) continue;
+
+                            bool inside = true;
+                            for (int c = 0; c < fp.Count; c++)
+                            {
+                                if (!bag.Contains(fp[c].x + "," + fp[c].y)) { inside = false; break; }
+                            }
+                            if (!inside) continue;
+
+                            Vector2Int cell = CellOfSquare(gs);
+                            string foot = CellsString(fp);
+                            anchors.Add(cell.x + "," + cell.y);
+                            footprints.Add(foot);
+                            sig.Append(cell.x).Append(',').Append(cell.y)
+                               .Append('=').Append(foot).Append(';');
+                        }
+
+                        if (!seen.Add(sig.ToString())) continue;   // 和前面某个朝向一模一样
+
+                        w.BeginObject();
+                        w.Prop("rot", deg);
+                        w.Name("placements").BeginArray();
+                        for (int p = 0; p < anchors.Count; p++)
+                        {
+                            w.BeginObject();
+                            w.Prop("cell", anchors[p]);
+                            w.Prop("cells", footprints[p]);
+                            w.EndObject();
+                        }
+                        w.EndArray();
+                        w.EndObject();
+                    }
+                }
+                w.EndArray();
+
+                // 探针只是临时改 transform 的朝向，算完必须还原（否则下一帧会看到歪的）
+                if (im != null) RotateItemTo(im, euler0);
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        /// <summary>
         /// 测试钩子：`ChangeSpaces(n)` + `SetupSpaces()`，把升级界面的「可加格子」配额设成 n。
         /// 只动游戏自己的计数，加格子仍由 <see cref="UnlockSpacesAction"/> 点真实 GridExtension。
         /// </summary>
@@ -2434,14 +2697,20 @@ namespace BphBridge
             im.StartDrag();
             if (!im.isDragging)
                 throw new InvalidOperationException(
-                    "StartDrag refused: isDragging=false (dead/phase/isStoppingDrag?)");
+                    "StartDrag refused: " + StartDragBlocked(im));
 
             Quaternion beforeRot = im.transform.rotation;
             Vector3 beforePos = im.transform.position;
 
             int times = (int)MiniJson.Num(pc.Action, "times", 1);
             if (times <= 0) times = 1;
-            if (type == "rotate_item")
+            // 朝向：`rot_deg` 是绝对角度（planner 用）；`times` 是相对 90°×n（手搓用）。
+            int rotDeg = (int)MiniJson.Num(pc.Action, "rot_deg", int.MinValue);
+            if (rotDeg != int.MinValue)
+            {
+                RotateItemTo(im, rotDeg);
+            }
+            else if (type == "rotate_item")
             {
                 im.transform.eulerAngles =
                     new Vector3(0f, 0f, beforeRot.eulerAngles.z + 90f * times);
@@ -2479,21 +2748,12 @@ namespace BphBridge
             }
 
             // EndDrag 之前先验证 footprint；不合法就 EndDrag 回原位再抛错。
+            // 占用用 `gridPositions` 算（自己已经 StartDrag 摘下来了，所以不用再排除自己）；
+            // 不用 `SquareOpen`——`containsItem` 会滞后，会把「本来空着」的格子判成占用。
             List<Vector2Int> fp = PredictCells(im, go, target);
             string bad = null;
             if (!hasTarget) bad = "no fitting cell";
-            else if (fp == null || fp.Count == 0) bad = "cannot compute footprint";
-            else
-            {
-                for (int i = 0; i < fp.Count; i++)
-                {
-                    string key = fp[i].x + "," + fp[i].y;
-                    GridSquare fs = BagSquareAt(fp[i]);
-                    if (fs == null) { bad = "footprint leaves bag at " + key; break; }
-                    if (extraFree.Contains(key)) continue;
-                    if (!SquareOpen(fs)) { bad = "footprint hits occupied " + key; break; }
-                }
-            }
+            else bad = CheckFootprint(fp, BagCellSet(), OccupiedCells(uid, null));
 
             if (bad != null)
             {
@@ -2550,7 +2810,7 @@ namespace BphBridge
             im.StartDrag();
             if (!im.isDragging)
                 throw new InvalidOperationException(
-                    "StartDrag refused: isDragging=false (dead/phase/isStoppingDrag?)");
+                    "StartDrag refused: " + StartDragBlocked(im));
 
             Vector3 drop = DropPosition();
             im.transform.position = drop;
@@ -2602,6 +2862,352 @@ namespace BphBridge
             w.Prop("free_squares", CountFreeSquares());
             w.EndObject();
             pc.DiagJson = w.ToString();
+        }
+
+        /// <summary>
+        /// `StartDrag()` 被拒时到底卡在哪一道门。IL（ItemMovement.StartDrag）的判定顺序：
+        ///   isStoppingDrag / GameManager.dead / GameFlowManager 为 null /
+        ///   !IsComplete() 且 inventoryPhase != 3 / itemMovementManager.isRunning /
+        ///   isCheckingForPuzzle / GameManager.draggingItem != null
+        /// 只读，用来把「swap aborted」这种错误变成能直接定位的信息。
+        /// </summary>
+        public static string StartDragBlocked(ItemMovement im)
+        {
+            List<string> parts = new List<string>();
+            try
+            {
+                GameManager gm = GameManager.main;
+                if (gm == null) parts.Add("GameManager=null");
+                else
+                {
+                    if (gm.dead) parts.Add("dead=true");
+                    parts.Add("inventoryPhase=" + (int)gm.inventoryPhase);
+                    object di = World.Field(gm, "draggingItem");
+                    UnityEngine.Object dio = di as UnityEngine.Object;
+                    if (dio != null) parts.Add("draggingItem=" + dio.name);
+                }
+            }
+            catch { }
+            try
+            {
+                GameFlowManager gf = GameFlowManager.main;
+                if (gf == null) parts.Add("GameFlowManager=null");
+                else
+                {
+                    parts.Add("battlePhase=" + (int)gf.battlePhase);
+                    parts.Add("IsComplete=" + gf.IsComplete());
+                    parts.Add("isCheckingEffects=" + gf.isCheckingEffects);
+                }
+            }
+            catch { }
+            try
+            {
+                if (im != null)
+                {
+                    parts.Add("isStoppingDrag=" + World.Field(im, "isStoppingDrag"));
+                    parts.Add("isDragging=" + im.isDragging);
+                    object mgr = World.Field(im, "itemMovementManager");
+                    if (mgr != null)
+                    {
+                        parts.Add("isRunning=" + World.Field(mgr, "isRunning"));
+                        parts.Add("isCheckingForPuzzle=" + World.Field(mgr, "isCheckingForPuzzle"));
+                    }
+                }
+            }
+            catch { }
+            return parts.Count == 0 ? "unknown" : string.Join(",", parts.ToArray());
+        }
+
+        /// <summary>
+        /// `place_item` 那一套顺序：StartDrag → 移 transform → 改 startPosition → EndDrag。
+        /// 返回 null 表示成功，否则是错误原因（调用方负责回滚）。
+        /// </summary>
+        private static string MoveTo(ItemMovement im, Vector3 target)
+        {
+            World.SetField(im, "isStoppingDrag", false);
+            im.StartDrag();
+            if (!im.isDragging)
+                return "StartDrag refused: " + StartDragBlocked(im);
+            im.transform.position = target;
+            World.SetField(im, "startPosition", im.transform.position);
+            World.SetField(im, "startRotation", im.transform.rotation);
+            World.CallPrivate(im, "EndDrag", null);
+            return null;
+        }
+
+        /// <summary>
+        /// 把一件**已经 LiftFromGrid 过**的物品落到 target：改 transform → `AddToGrid`。
+        ///
+        /// `AddToGrid` 是 public，正是 `EndDrag` 内部最后调的那一步（SnapToGrid + 占格判定 +
+        /// 设 parent + objsInGrid+1），所以对一件「已经不在格子里」的物品来说，
+        /// 「直接 AddToGrid」和「StartDrag→取样→EndDrag」等价，但**不需要拖拽态**。
+        /// swap 的第二步必须这样走：同一条命令里第二次 `StartDrag` 会被
+        /// `GameManager.draggingItem`（还指着上一件）挡掉——真机实测。
+        /// </summary>
+        private static string PlaceLifted(Item2 it, ItemMovement im, Vector3 target, Quaternion rot)
+        {
+            if (it == null || im == null) return "no item";
+            GridObject go = ResolveGridObject(it, im);
+            if (go == null) return "no GridObject (shape unknown)";
+            try { go.ClearGridPositions(); } catch { }
+            im.transform.position = target;
+            im.transform.rotation = rot;
+            im.AddToGrid(false);
+            bool ok = false;
+            try { ok = im.inGrid; } catch { }
+            if (!ok) return "AddToGrid left inGrid=false";
+            return null;
+        }
+
+        /// <summary>
+        /// 把物品放回「原位置 + 原朝向」（swap 回滚用）。走同一条手工路径：
+        /// 先摘格子（在格的才扣 objsInGrid），再 AddToGrid 登记回去。
+        /// </summary>
+        private static void RestoreItem(Item2 it, ItemMovement im, Vector3 pos, Quaternion rot)
+        {
+            if (im == null) return;
+            try
+            {
+                GridObject go = ResolveGridObject(it, im);
+                if (go != null) go.ClearGridPositions();
+                bool wasInGrid = false;
+                try { wasInGrid = im.inGrid; } catch { }
+                if (wasInGrid)
+                {
+                    GameManager gm = GameManager.main;
+                    if (gm != null && gm.objsInGrid > 0) gm.objsInGrid = gm.objsInGrid - 1;
+                }
+                im.transform.position = pos;
+                im.transform.rotation = rot;
+                im.AddToGrid(false);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 把物品从背包里「逻辑上」摘下来：清 gridPositions / parentInventoryGrid=null /
+        /// inGrid=false / objsInGrid-1。也就是 `RemoveFromGrid` 的必要效果。
+        ///
+        /// **为什么不直接调 `RemoveFromGrid()`**：实测它会走 `isCheckingEffects` 那条分支
+        /// （启动一个 `RemoveAtEnd()` 协程），协程把 `ItemMovementManager.isRunning` 置真，
+        /// 于是同一帧里紧接着的 `StartDrag()` 全部被拒——
+        /// `swap aborted (StartDrag refused: ...,isRunning=True)`。
+        /// 这条自建路径只动状态、不起协程，`drop_item` 早就在用同一套语义。
+        /// </summary>
+        private static string LiftFromGrid(Item2 it, ItemMovement im)
+        {
+            if (it == null || im == null) return "no item";
+            GridObject go = ResolveGridObject(it, im);
+            if (go == null) return "no GridObject (shape unknown)";
+            try { go.ClearGridPositions(); } catch { }
+            try { it.parentInventoryGrid = null; } catch { }
+            im.inGrid = false;
+            im.inPouch = false;
+            try
+            {
+                GameManager gm = GameManager.main;
+                if (gm != null && gm.objsInGrid > 0) gm.objsInGrid = gm.objsInGrid - 1;
+            }
+            catch { }
+            RefreshOccupancy();
+            return null;
+        }
+
+        /// <summary>
+        /// 两件互换（swap）——**必须一条动作里做完**，因为中间态跨动作表达不了：
+        ///
+        ///   A 在 cellsA、B 在 cellsB，背包可能一个空格都没有。
+        ///   1) `LiftFromGrid(A)`：把 A 从背包里摘下来 → **A 的旧格算空**（关键中间态）
+        ///   2) 把 B 放到 A 的旧位置（占用 = 所有 inGrid 物品的 gridPositions，A 已不在其中）
+        ///   3) 把 A 放到 B 的旧位置（占用现在含 B 的新位置；B 的旧格已经空出来）
+        ///
+        /// 第 1 步不能用 `StartDrag` 代替：`StartDrag` 在 `GameManager.draggingItem != null`
+        /// 时直接 return（IL IL_006a），也就是说**同一时刻只允许一件物品处于拖拽态**。
+        /// 也不能用 `RemoveFromGrid`：它会起协程把 `itemMovementManager.isRunning` 置真，
+        /// 同一帧里后面的 StartDrag 就全被拒。所以用自建的 `LiftFromGrid`（同一套状态语义）。
+        ///
+        /// 任一步不合法就回滚（B 先回原位、A 再回原位），不留半截状态。
+        /// 落点由 agent 的 planner 用 `probe_fit` 算好传进来（`a_cell/b_cell` + `a_rot/b_rot`）；
+        /// 不给就落到对方的锚点（同形状时等于真正的互换）。
+        /// </summary>
+        private static void SwapItemsAction(PendingCommand pc)
+        {
+            string uidA = MiniJson.Str(pc.Action, "a", "");
+            string uidB = MiniJson.Str(pc.Action, "b", "");
+            if (uidA.Length == 0 || uidB.Length == 0)
+                throw new InvalidOperationException("swap_items needs a and b");
+            if (uidA == uidB) throw new InvalidOperationException("swap_items a == b");
+
+            Item2 a = FindItem(uidA);
+            Item2 b = FindItem(uidB);
+            if (a == null) throw new InvalidOperationException("item not found: " + uidA);
+            if (b == null) throw new InvalidOperationException("item not found: " + uidB);
+
+            ItemMovement imA = null;
+            ItemMovement imB = null;
+            try { imA = a.GetItemMovement(); } catch { }
+            try { imB = b.GetItemMovement(); } catch { }
+            if (imA == null) throw new InvalidOperationException("no ItemMovement on " + uidA);
+            if (imB == null) throw new InvalidOperationException("no ItemMovement on " + uidB);
+
+            List<string> cellsA0 = ItemCells(a);
+            List<string> cellsB0 = ItemCells(b);
+            if (cellsA0.Count == 0) throw new InvalidOperationException("not in bag: " + uidA);
+            if (cellsB0.Count == 0) throw new InvalidOperationException("not in bag: " + uidB);
+
+            int freeBefore = CountFreeSquares();
+            int gridBefore = CountGridSquares();
+
+            // 朝向角（needs 与 footprint 都按它算；StartDrag 会归整到 90° 的倍数）
+            int eulerA0 = EulerZ(imA);
+            int eulerB0 = EulerZ(imB);
+            RotateItemTo(imA, eulerA0);
+            RotateItemTo(imB, eulerB0);
+
+            Vector3 posA0 = imA.transform.position;
+            Quaternion rotA0 = imA.transform.rotation;
+            Vector3 posB0 = imB.transform.position;
+            Quaternion rotB0 = imB.transform.rotation;
+
+            GridObject goA = ResolveGridObject(a, imA);
+            GridObject goB = ResolveGridObject(b, imB);
+            if (goA == null) throw new InvalidOperationException("no GridObject on " + uidA);
+            if (goB == null) throw new InvalidOperationException("no GridObject on " + uidB);
+
+            HashSet<string> bag = BagCellSet();
+
+            // ---- 落点 + 朝向 ----
+            bool hasCellA = false, hasCellB = false;
+            Vector3 targetA = posB0;
+            Vector3 targetB = posA0;
+            string wantA = MiniJson.Str(pc.Action, "a_cell", "");
+            string wantB = MiniJson.Str(pc.Action, "b_cell", "");
+            if (wantB.Length > 0)
+            {
+                Vector2Int c;
+                if (!TryParseCell(wantB, out c))
+                    throw new InvalidOperationException("bad b_cell: " + wantB);
+                GridSquare gs = BagSquareAt(c);
+                if (gs == null) throw new InvalidOperationException("no bag square at " + wantB);
+                targetB = gs.transform.position;
+                hasCellB = true;
+            }
+            if (wantA.Length > 0)
+            {
+                Vector2Int c;
+                if (!TryParseCell(wantA, out c))
+                    throw new InvalidOperationException("bad a_cell: " + wantA);
+                GridSquare gs = BagSquareAt(c);
+                if (gs == null) throw new InvalidOperationException("no bag square at " + wantA);
+                targetA = gs.transform.position;
+                hasCellA = true;
+            }
+            int rotAg = (int)MiniJson.Num(pc.Action, "a_rot", int.MinValue);
+            int rotBg = (int)MiniJson.Num(pc.Action, "b_rot", int.MinValue);
+            if (rotAg != int.MinValue) RotateItemTo(imA, rotAg);
+            if (rotBg != int.MinValue) RotateItemTo(imB, rotBg);
+
+            // ---- 1) 把 A 从背包里摘下来（A 的旧格从此算空） ----
+            // 不能用 StartDrag：同一时刻只允许一件物品处于拖拽态（GameManager.draggingItem）。
+            // 也不能用 RemoveFromGrid：它会起协程、把 itemMovementManager.isRunning 置真，
+            // 同一帧里后面的 StartDrag 就全被拒了（真机实测）。见 LiftFromGrid。
+            string liftErr = LiftFromGrid(a, imA);
+            if (liftErr != null)
+            {
+                RefreshOccupancy();
+                throw new InvalidOperationException(
+                    "swap aborted: cannot lift " + uidA + " (" + liftErr + ")");
+            }
+            bool aStillInGrid = false;
+            try { aStillInGrid = imA.inGrid; } catch { }
+            if (aStillInGrid)
+            {
+                RefreshOccupancy();
+                throw new InvalidOperationException(
+                    "swap aborted: lift did not detach " + uidA);
+            }
+
+            // ---- 2) B -> A 的旧位置 ----
+            HashSet<string> occ1 = OccupiedCells(uidA, null);
+            string badB = CheckFootprint(PredictCells(imB, goB, targetB), bag, occ1);
+            if (badB != null)
+            {
+                RestoreItem(a, imA, posA0, rotA0);   // A 回原位
+                RefreshOccupancy();
+                throw new InvalidOperationException("swap aborted, nothing moved (" + uidB +
+                    " -> " + (hasCellB ? wantB : "A-anchor") + ": " + badB + ")");
+            }
+
+            string badMoveB = MoveTo(imB, targetB);
+            if (badMoveB != null)
+            {
+                RestoreItem(a, imA, posA0, rotA0);
+                RefreshOccupancy();
+                throw new InvalidOperationException("swap aborted (" + uidB + ": " +
+                    badMoveB + ")");
+            }
+            RefreshOccupancy();
+
+            // ---- 3) A -> B 的旧位置 ----
+            HashSet<string> occ2 = OccupiedCells(uidA, null);
+            string badA = CheckFootprint(PredictCells(imA, goA, targetA), bag, occ2);
+            if (badA != null)
+            {
+                // 回滚：B 先回原位（B 的旧格空着，A 还没进包），A 再回原位
+                RestoreItem(b, imB, posB0, rotB0);
+                RestoreItem(a, imA, posA0, rotA0);
+                RefreshOccupancy();
+                throw new InvalidOperationException("swap aborted, both restored (" + uidA +
+                    " -> " + (hasCellA ? wantA : "B-anchor") + ": " + badA + ")");
+            }
+
+            // 这里**不能**再用 StartDrag：同一条命令里第二次拖动会被 draggingItem 挡掉。
+            string badPlaceA = PlaceLifted(a, imA, targetA, imA.transform.rotation);
+            if (badPlaceA != null)
+            {
+                RestoreItem(b, imB, posB0, rotB0);
+                RestoreItem(a, imA, posA0, rotA0);
+                RefreshOccupancy();
+                throw new InvalidOperationException("swap aborted, both restored (" + uidA +
+                    ": " + badPlaceA + ")");
+            }
+            RefreshOccupancy();
+
+            JsonWriter w = new JsonWriter();
+            w.BeginObject();
+            w.Prop("action", "swap_items");
+            w.Prop("a", uidA);
+            w.Prop("b", uidB);
+            w.Name("a_cells_before").BeginArray();
+            for (int i = 0; i < cellsA0.Count; i++) w.Value(cellsA0[i]);
+            w.EndArray();
+            w.Name("b_cells_before").BeginArray();
+            for (int i = 0; i < cellsB0.Count; i++) w.Value(cellsB0[i]);
+            w.EndArray();
+            w.Name("a_cells").BeginArray();
+            List<string> aCells1 = ItemCells(a);
+            for (int i = 0; i < aCells1.Count; i++) w.Value(aCells1[i]);
+            w.EndArray();
+            w.Name("b_cells").BeginArray();
+            List<string> bCells1 = ItemCells(b);
+            for (int i = 0; i < bCells1.Count; i++) w.Value(bCells1[i]);
+            w.EndArray();
+            w.Prop("a_in_bag", ItemInBag(uidA));
+            w.Prop("b_in_bag", ItemInBag(uidB));
+            w.Prop("free_squares_before", freeBefore);
+            w.Prop("free_squares", CountFreeSquares());
+            w.Prop("grid_squares_before", gridBefore);
+            w.Prop("grid_squares", CountGridSquares());
+            w.EndObject();
+            pc.DiagJson = w.ToString();
+        }
+
+        /// <summary>transform 的 z 角，归一到 [0,360)。</summary>
+        private static int EulerZ(ItemMovement im)
+        {
+            if (im == null) return 0;
+            try { return ((int)Mathf.Round(im.transform.eulerAngles.z) % 360 + 360) % 360; }
+            catch { return 0; }
         }
 
         private static void DiagEventAction(PendingCommand pc)

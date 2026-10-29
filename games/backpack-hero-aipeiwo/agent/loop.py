@@ -30,6 +30,7 @@ sys.path.insert(0, str(HERE.parent / "adapter"))
 from client import Bridge, BridgeError  # noqa: E402
 from ledger import Ledger  # noqa: E402
 from policy import Flags, choose, flags_label, score_action, set_flags  # noqa: E402
+from place import place_with_room  # noqa: E402
 
 MAX_CONSECUTIVE_NOCHANGE = 4
 MAX_LEVEL_ATTEMPTS = 12  # 同一次升级最多试几次（扩容要 grant+逐格点+收尾，步数变多了）
@@ -152,6 +153,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="阵亡后调 GameManager.Retry() 再开一局（需要新桥接的 retry_run）")
     ap.add_argument("--max-retries", type=int, default=8,
                     help="--auto-retry 最多重开几次")
+    ap.add_argument("--make-room", type=int, default=0, metavar="N",
+                    help="背包放不下战利品时，最多丢 N 件最低价值的背包物品来腾位。"
+                         "0 = 不丢（老行为：放不下就放弃）。判断价值用账本均值，"
+                         "没测过的物品不当作 0 分（不会第一个被丢）")
     args = ap.parse_args(argv)
 
     flags = set_flags(Flags(
@@ -193,6 +198,30 @@ def main(argv: list[str] | None = None) -> int:
     def record(obj: dict[str, Any]) -> None:
         log.write(json.dumps(obj, ensure_ascii=False) + "\n")
         log.flush()
+
+    # ---------------- 放战利品（含腾位） ----------------
+    # 桥接的 place_item 只会按「当前朝向」扫空格，满包/碎片化时直接报 no fitting cell。
+    # 现在走 agent/place.py：probe_fit 拿几何表 -> agent/backpack.py 搜落点
+    # （4 朝向 × 所有格）-> 需要就先挪/换一件背包物品 -> 还不行就按 --make-room
+    # 丢最低价值的 -> 再放。整条链的每一跳都在 ack 里留痕。
+    drops_left = max(0, args.make_room)
+
+    def try_place(base: dict[str, Any]) -> dict[str, Any] | None:
+        """尽力放一件战利品。返回最后一次 ack；None = 这件不放了。"""
+        nonlocal drops_left
+        res = place_with_room(
+            bridge, base.get("uid", ""),
+            name=base.get("name", "") or "",
+            ledger=ledger,
+            drops_left=drops_left,
+            log=lambda s: print(f"     {s}"),
+            record=record,
+        )
+        drops_left = res.drops_left
+        if res.reason == "no probe":
+            # 探针不可用（老桥接 / 形状算不出来）：退回原来的「直接发一次」。
+            return bridge.act(base, timeout_ms=20000)
+        return res.ack
 
     print(f"loop log: {log_path}")
     record({"event": "start", "flags": flags_label(flags),
@@ -313,19 +342,27 @@ def main(argv: list[str] | None = None) -> int:
                             break
 
                 if action.get("type") == "place_item":
+                    # 走 planner：4 朝向搜落点 + 需要时挪/换/丢（--make-room）
                     _sk = place_skips.get(action.get("uid", ""), 0)
                     if _sk:
                         action = dict(action)
                         action["skip"] = _sk
-
-                ack = bridge.act(action, timeout_ms=20000)
+                    ack = try_place(action)
+                    if ack is None:
+                        explored.add(f"place:{action.get('uid', '')}")
+                        steps += 1
+                        continue
+                else:
+                    ack = bridge.act(action, timeout_ms=20000)
                 delta = ack.get("delta") or {}
-                record({"event": "act", "action": action, "ok": ack.get("ok"),
-                        "changed": ack.get("changed"), "ms": ack.get("ms"),
-                        "delta": delta, "receipt": ack.get("receipt"),
-                        "error": ack.get("error")})
-                print(f"     ok={ack.get('ok')} changed={ack.get('changed')} ms={ack.get('ms')} "
-                      f"delta={json.dumps(delta, ensure_ascii=False)}")
+                # place_item 的 ack 已经在 try_place 里记过（带 plan/cell/rot），别记两遍
+                if action.get("type") != "place_item":
+                    record({"event": "act", "action": action, "ok": ack.get("ok"),
+                            "changed": ack.get("changed"), "ms": ack.get("ms"),
+                            "delta": delta, "receipt": ack.get("receipt"),
+                            "error": ack.get("error")})
+                    print(f"     ok={ack.get('ok')} changed={ack.get('changed')} "
+                          f"ms={ack.get('ms')} delta={json.dumps(delta, ensure_ascii=False)}")
                 if ack.get("error"):
                     print(f"     error={ack['error']}")
 
@@ -592,9 +629,20 @@ def main(argv: list[str] | None = None) -> int:
             if args.dry_run:
                 break
 
-            ack = bridge.act(action, timeout_ms=30000)
-            print(f"     ok={ack.get('ok')} changed={ack.get('changed')} ms={ack.get('ms')} "
-                  f"delta={json.dumps(ack.get('delta') or {}, ensure_ascii=False)}")
+            if action.get("type") == "place_item":
+                _sk = place_skips.get(action.get("uid", ""), 0)
+                if _sk:
+                    action = dict(action)
+                    action["skip"] = _sk
+                ack = try_place(action)
+                if ack is None:
+                    explored.add(f"place:{action.get('uid', '')}")
+                    steps += 1
+                    continue
+            else:
+                ack = bridge.act(action, timeout_ms=30000)
+                print(f"     ok={ack.get('ok')} changed={ack.get('changed')} ms={ack.get('ms')} "
+                      f"delta={json.dumps(ack.get('delta') or {}, ensure_ascii=False)}")
             if ack.get("error"):
                 print(f"     error={ack['error']}")
 
@@ -623,21 +671,22 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"     （配额 {_d.get('number_to_unlock_before')}→"
                       f"{_d.get('number_to_unlock_after')}）")
 
-            # 地图阶段的战利品摆放：和战斗里同一套「换候选格重试一次」。
+            # 地图阶段的战利品摆放：和战斗里同一套（planner + --make-room）。
             if action.get("type") == "place_item" and ack.get("changed"):
                 place_skips.pop(action.get("uid", ""), None)
             if action.get("type") == "place_item" and not ack.get("changed"):
                 uid = action.get("uid", "")
                 if place_skips.get(uid, 0) < 1:
                     place_skips[uid] = place_skips.get(uid, 0) + 1
-                    print("     摆放失败（形状/遮挡），换候选格重试一次")
+                    print("     摆放失败（形状/遮挡），下一轮换候选格再试一次")
                 else:
                     explored.add(f"place:{uid}")
                     place_skips.pop(uid, None)
-            record({"event": "act", "action": action, "ok": ack.get("ok"),
-                    "changed": ack.get("changed"), "ms": ack.get("ms"),
-                    "delta": ack.get("delta"), "receipt": ack.get("receipt"),
-                    "error": ack.get("error")})
+            if action.get("type") != "place_item":
+                record({"event": "act", "action": action, "ok": ack.get("ok"),
+                        "changed": ack.get("changed"), "ms": ack.get("ms"),
+                        "delta": ack.get("delta"), "receipt": ack.get("receipt"),
+                        "error": ack.get("error")})
 
             nochange_streak = 0 if ack.get("changed") else nochange_streak + 1
             if nochange_streak >= MAX_CONSECUTIVE_NOCHANGE:

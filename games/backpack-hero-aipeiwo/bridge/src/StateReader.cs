@@ -443,20 +443,77 @@ namespace BphBridge
 
                 // 战斗里掉在地上的东西：战斗一结束就会被销毁（SPIKE-06 §18），
                 // 所以「捡起来」必须进合法动作，否则 agent 只能眼睁睁看它消失。
+                // 满包时也给（带上 needs/free + drop/move/rotate 候选），
+                // 让上层有机会腾位——机制和地图阶段一样，见 MapProbe.WriteLootAndRoom。
                 List<Item2> looseInBattle = World.ItemsLoose();
                 if (looseInBattle != null)
                 {
+                    int bFree = Actions.CountFreeSquares();
+                    bool bTight = false;
                     for (int i = 0; i < looseInBattle.Count && i < 4; i++)
                     {
                         Item2 lit = looseInBattle[i];
                         if (lit == null) continue;
                         int luid = I(delegate { return lit.GetInstanceID(); }, 0);
                         string lname = S(delegate { return lit.displayName; });
+                        int lneeds = Actions.SpacesNeeded(lit, null);
+                        bool fits = lneeds > 0 && bFree >= lneeds;
+                        if (!fits) bTight = true;
                         w.BeginObject();
                         w.Prop("type", "place_item");
                         w.Prop("uid", "i" + luid);
                         w.Prop("name", lname);
+                        w.Prop("needs", lneeds);
+                        w.Prop("free", bFree);
+                        w.Prop("fits", fits);
                         w.EndObject();
+                    }
+
+                    // 放不下就给「腾位」候选：丢弃（每件一条）+ 挪/转（各一条）。
+                    // 同 MapProbe：具体怎么腾由 agent 的 planner 用 probe_fit 算。
+                    if (bTight)
+                    {
+                        int dCount = 0;
+                        int mCount = 0;
+                        for (int i = 0; i < inGrid.Count && (dCount < 3 || mCount < 2); i++)
+                        {
+                            Item2 bit = inGrid[i];
+                            if (bit == null || !World.IsPlaced(bit)) continue;
+                            int buid = I(delegate { return bit.GetInstanceID(); }, 0);
+                            string bname = S(delegate { return bit.displayName; });
+                            int bsize = Actions.ItemCells(bit).Count;
+
+                            if (dCount < 3)
+                            {
+                                w.BeginObject();
+                                w.Prop("type", "drop_item");
+                                w.Prop("uid", "i" + buid);
+                                w.Prop("name", bname);
+                                w.Prop("size", bsize);
+                                w.Prop("is_relic", Actions.IsRelicItem(bit));
+                                w.Prop("why", "make_room");
+                                w.EndObject();
+                                dCount++;
+                            }
+                            if (mCount < 2)
+                            {
+                                w.BeginObject();
+                                w.Prop("type", "move_item");
+                                w.Prop("uid", "i" + buid);
+                                w.Prop("name", bname);
+                                w.Prop("size", bsize);
+                                w.Prop("why", "make_room");
+                                w.EndObject();
+                                w.BeginObject();
+                                w.Prop("type", "rotate_item");
+                                w.Prop("uid", "i" + buid);
+                                w.Prop("name", bname);
+                                w.Prop("times", 1);
+                                w.Prop("why", "make_room");
+                                w.EndObject();
+                                mCount++;
+                            }
+                        }
                     }
                 }
 

@@ -233,6 +233,12 @@ def _score_parts(
             return -1.0, 0.0, 0.0, f"{uid}: already failed to place"
         return LOOT_SCORE, 0.0, 0.0, f"pick up {action.get('name', uid)!r} before it is destroyed"
 
+    # 背包内挪动 / 互换 / 丢弃：只由「腾位」计划按需发出（agent/backpack.py）。
+    # 战斗策略**不能**自己挑它们——丢东西不可逆，挪动本身也不产生任何价值，
+    # 让它们参与打分只会把 end_turn 换成一次无意义的拖拽。
+    if t in ("move_item", "rotate_item", "swap_items", "drop_item"):
+        return -1.0, 0.0, 0.0, f"{t}: only the make-room planner may pick this"
+
     uid = action.get("uid", "")
     item = _items_by_uid(state).get(uid)
     if item is None:

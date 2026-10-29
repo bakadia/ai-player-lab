@@ -266,3 +266,51 @@ if (!inSpecialReorg && inventoryPhase != choose(2) && !limitedItemReorganize) re
   把乱码文本转回字节再按 UTF-8 解码；行尾被吃掉的换行按「`?` + 缩进」补回去。
   本次就这么恢复的，并用「逐方法比 IL」证明代码没变（除预期改动外完全一致）。
 
+## E12 · `RemoveFromGrid()` 会把 `itemMovementManager.isRunning` 置真，同帧的 `StartDrag` 全被拒
+
+**怎么发现的**：`swap_items` 的第一步用 `RemoveFromGrid(A)` 把 A 从背包里摘下来
+（A 的旧格于是算空），紧接第二步 `StartDrag(B)` 却每次都被拒。原来的报错只说
+`StartDrag refused: isDragging=false`，完全看不出原因；把判定链路的每个字段都打进
+错误信息之后才看到：
+
+```
+swap aborted (i-4198: StartDrag refused: inventoryPhase=1,battlePhase=0,
+IsComplete=False,isCheckingEffects=True,isStoppingDrag=False,isDragging=False,
+isRunning=True,isCheckingForPuzzle=False)
+```
+
+**真相**：`ItemMovement.StartDrag()` 的 IL 门是
+`isStoppingDrag / GameManager.dead / GameFlowManager 为 null /
+(!IsComplete() && inventoryPhase != 3) / itemMovementManager.isRunning /
+isCheckingForPuzzle / GameManager.draggingItem != null`。
+`RemoveFromGrid()` 在 `GameFlowManager.isCheckingEffects == true` 时会走
+「启动 `RemoveAtEnd()` 协程」那条分支，协程把 `ItemMovementManager.isRunning` 置真，
+于是同一帧里再也抬不起第二件物品。
+
+**以后怎么办**：
+
+- 「把物品从背包里摘下来」不要调 `RemoveFromGrid`，用 `Actions.LiftFromGrid()`：
+  只做必要状态（`ClearGridPositions` + `parentInventoryGrid=null` +
+  `inGrid/inPouch=false` + `objsInGrid-1`），不起协程。
+- 任何「一个动作里要挪两件物品」的地方，都先看一眼 `isRunning`／`draggingItem`。
+
+## E13 · 同一时刻只能拖一件；`EndDrag` 不会清 `draggingItem`
+
+**怎么发现的**：`swap` 修好 E12 之后仍然失败在第三步——
+`StartDrag refused: ...,draggingItem=Wooden Sword Variant(Clone)`。
+也就是说**上一步的 EndDrag 已经跑完了，`draggingItem` 还指着那件物品**。
+它是在游戏自己的 `Update` 里（隔帧）才被清掉的，所以：
+
+- 分成两条命令的 `move_item` / `place_item` 连续做没问题（中间隔了十几帧）；
+- 同一条命令里连做两次 StartDrag 一定失败。
+
+**以后怎么办**：
+
+- 一条动作最多 `StartDrag` 一次。其余落位用 `Actions.PlaceLifted()`：
+  `transform.position = target` 之后直接调 public 的 `AddToGrid(false)`
+  （`EndDrag` 内部也就是这一步：SnapToGrid + 占格判定 + 设 parent + `objsInGrid+1`）。
+- 回滚同理：`Actions.RestoreItem()` 走「摘格子 → AddToGrid」的手工路径，
+  不要再依赖 StartDrag/EndDrag。
+- 报错时把 `draggingItem` 的名字打出来，否则「谁占着拖拽态」根本看不出来。
+
+

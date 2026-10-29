@@ -309,42 +309,19 @@ namespace BphBridge
                 }
             }
 
-            // 2.9) 地图阶段地上的战利品：宝箱开完后 loot 是 loose，走开会被销毁。
-            //      背包完全没空格就不给 place_item，免得 agent 空转 10 秒。
-            List<Item2> looseItems = World.ItemsLoose();
-            if (looseItems != null && looseItems.Count > 0)
-            {
-                int free = -1;
-                try
-                {
-                    List<GridSquare> grids = GridSquare.allGrids;
-                    if (grids != null)
-                    {
-                        free = 0;
-                        for (int i = 0; i < grids.Count; i++)
-                        {
-                            if (Actions.SquareOpen(grids[i])) free++;
-                        }
-                    }
-                }
-                catch { }
-
-                if (free != 0)
-                {
-                    for (int i = 0; i < looseItems.Count && i < 4; i++)
-                    {
-                        Item2 lit = looseItems[i];
-                        if (lit == null) continue;
-                        int luid = IInt(delegate { return lit.GetInstanceID(); }, 0);
-                        string lname = SStr(delegate { return lit.displayName; });
-                        w.BeginObject();
-                        w.Prop("type", "place_item");
-                        w.Prop("uid", "i" + luid);
-                        w.Prop("name", lname);
-                        w.EndObject();
-                    }
-                }
-            }
+            // 2.9) 背包容量 + 地上的战利品。
+            //
+            // 旧逻辑在 `free == 0` 时**什么都不给**，于是「满包」就完全看不见战利品，
+            // agent 也就没有机会腾位（drop/move/rotate）。现在不管满不满都列，
+            // 带上 `needs`（这件要占几格）和 `free`，让上层自己决定要不要腾。
+            //
+            // 腾位候选（只在「确实放不下」时才给，避免 legal 里塞一堆噪音）：
+            //   - `drop_item`：每件背包物品一条（带 size / is_relic / gold），上层按价值挑
+            //   - `move_item` / `rotate_item`：背包物品各一条（不带 cell，桥接自己找落点），
+            //     用来试「挪一挪/转一转能不能拼出连续空间」
+            // 这三类只描述「可以做的动作」，具体怎么腾由 agent 的 planner（agent/backpack.py）
+            // 用 probe_fit 的几何表算——legal 里不展开 4 朝向 × 所有格子（那会是几百条）。
+            WriteLootAndRoom(w);
 
             // 3) 能升级
             LevelUpManager lum = null;
@@ -390,19 +367,104 @@ namespace BphBridge
                 written++;
             }
 
-            // 6) 地上有东西就提示「捡起来」——战斗结束瞬间它们会被销毁
-            List<Item2> loose = World.ItemsLoose();
-            if (loose != null)
+            // 6) 地上的战利品已经在 2.9 里统一给了（带 needs/free），这里不再重复。
+        }
+
+        /// <summary>
+        /// 战利品摆放 + 腾位候选。这一段是「满包也能捡东西」的入口：
+        /// 以前 `free == 0` 时一个 place_item 都不给，agent 连尝试的机会都没有。
+        /// </summary>
+        private static void WriteLootAndRoom(JsonWriter w)
+        {
+            List<Item2> looseItems = World.ItemsLoose();
+            if (looseItems == null || looseItems.Count == 0) return;
+
+            int free = Actions.CountFreeSquares();
+
+            List<Item2> bagItems = World.ItemsInGrid();
+            int bagCount = 0;
+            if (bagItems != null)
             {
-                for (int i = 0; i < loose.Count && i < 4; i++)
+                for (int i = 0; i < bagItems.Count; i++)
                 {
-                    Item2 it = loose[i];
-                    if (it == null) continue;
+                    if (bagItems[i] != null && World.IsPlaced(bagItems[i])) bagCount++;
+                }
+            }
+
+            bool anyTooBig = false;
+
+            for (int i = 0; i < looseItems.Count && i < 4; i++)
+            {
+                Item2 lit = looseItems[i];
+                if (lit == null) continue;
+
+                int luid = IInt(delegate { return lit.GetInstanceID(); }, 0);
+                string lname = SStr(delegate { return lit.displayName; });
+                int needs = Actions.SpacesNeeded(lit, null);
+                // free >= needs 只是必要条件（碎片化时仍放不下），真正能不能放
+                // 由 agent 用 probe_fit 的几何表算；这里给一个便宜的提示。
+                bool fitsGuess = needs > 0 && free >= needs;
+                if (!fitsGuess) anyTooBig = true;
+
+                w.BeginObject();
+                w.Prop("type", "place_item");
+                w.Prop("uid", "i" + luid);
+                w.Prop("name", lname);
+                w.Prop("needs", needs);
+                w.Prop("free", free);
+                w.Prop("fits", fitsGuess);
+                w.EndObject();
+            }
+
+            // 有东西放不下 -> 给出「怎么腾」的候选（真的可执行的动作，不是提示）
+            if (!anyTooBig || bagCount == 0) return;
+
+            int drops = 0;
+            int moves = 0;
+            for (int i = 0; i < bagItems.Count && (drops < 4 || moves < 3); i++)
+            {
+                Item2 it = bagItems[i];
+                if (it == null || !World.IsPlaced(it)) continue;
+
+                int iuid = IInt(delegate { return it.GetInstanceID(); }, 0);
+                string iname = SStr(delegate { return it.displayName; });
+                List<string> cells = Actions.ItemCells(it);
+                int size = cells.Count;
+                bool relic = BBool(delegate { return Actions.IsRelicItem(it); }, false);
+                int gold = IInt(delegate { return Actions.ItemGoldCost(it); }, 0);
+
+                if (drops < 4)
+                {
                     w.BeginObject();
-                    w.Prop("type", "place_item");
-                    WriteRef(w, "uid", "i", it);
-                    w.Prop("name", SStr(delegate { return it.displayName; }));
+                    w.Prop("type", "drop_item");
+                    w.Prop("uid", "i" + iuid);
+                    w.Prop("name", iname);
+                    w.Prop("size", size);
+                    w.Prop("is_relic", relic);
+                    w.Prop("gold", gold);
+                    w.Prop("why", "make_room");
                     w.EndObject();
+                    drops++;
+                }
+
+                if (moves < 3)
+                {
+                    w.BeginObject();
+                    w.Prop("type", "move_item");
+                    w.Prop("uid", "i" + iuid);
+                    w.Prop("name", iname);
+                    w.Prop("size", size);
+                    w.Prop("why", "make_room");
+                    w.EndObject();
+
+                    w.BeginObject();
+                    w.Prop("type", "rotate_item");
+                    w.Prop("uid", "i" + iuid);
+                    w.Prop("name", iname);
+                    w.Prop("times", 1);
+                    w.Prop("why", "make_room");
+                    w.EndObject();
+                    moves++;
                 }
             }
         }
