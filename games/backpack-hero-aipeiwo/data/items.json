@@ -85,15 +85,15 @@
       "damage_sum": 0,
       "effects": {
         "heal": {
-          "count": 4,
-          "sum": 38.0
+          "count": 5,
+          "sum": 48.0
         },
         "item_status:locked": {
-          "count": 8,
-          "sum": 16.0
+          "count": 12,
+          "sum": 24.0
         }
       },
-      "samples": 4
+      "samples": 5
     },
     "CAVE FISH": {
       "block_sum": 0,
@@ -145,14 +145,14 @@
     },
     "DAMAGED KNIFE": {
       "block_sum": 0,
-      "damage_sum": 17,
+      "damage_sum": 41,
       "effects": {
         "status:rage:enemy": {
           "count": 1,
           "sum": 1.0
         }
       },
-      "samples": 3
+      "samples": 6
     },
     "DART": {
       "block_sum": 0,
@@ -225,11 +225,11 @@
       "samples": 4
     },
     "HATCHET": {
-      "absorbed_sum": 3,
+      "absorbed_sum": 6,
       "block_sum": 0,
-      "damage_sum": 20,
+      "damage_sum": 23,
       "effects": {},
-      "samples": 11
+      "samples": 17
     },
     "HEAT POTION": {
       "block_sum": 0,
@@ -361,10 +361,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 5145,
+      "block_sum": 5243,
       "damage_sum": 0,
       "effects": {},
-      "samples": 735
+      "samples": 749
     },
     "ROW CHAIN STAR": {
       "block_sum": 0,
@@ -511,17 +511,17 @@
       "samples": 3
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 1855,
+      "absorbed_sum": 1888,
       "block_sum": 0,
-      "damage_sum": 8713,
+      "damage_sum": 9015,
       "effects": {
         "gold": {
           "count": 4,
           "sum": 37.0
         },
         "item_status:locked": {
-          "count": 8,
-          "sum": 8.0
+          "count": 14,
+          "sum": 14.0
         },
         "luck:legendary": {
           "count": 4,
@@ -552,15 +552,15 @@
           "sum": 5.0
         },
         "status:rage:enemy": {
-          "count": 114,
-          "sum": 114.0
+          "count": 120,
+          "sum": 120.0
         },
         "status:spikes:player": {
           "count": 3,
           "sum": 3.0
         }
       },
-      "samples": 1653
+      "samples": 1708
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
