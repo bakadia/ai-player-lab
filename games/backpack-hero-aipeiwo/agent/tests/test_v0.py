@@ -540,6 +540,11 @@ def test_reward_pick():
     assert reward_score("POULTICE", db, 38, 40) < reward_score("WOODEN SWORD", db, 38, 40)
     assert pick_reward([], db) == 0
     assert pick_reward(["???"], None) == 0
+
+    # 护甲流：每回合 6 甲的 Knight's Armor（≈2.57 费）应该压过一把 1 费 7 伤的剑。
+    # 用户口径：「7 护甲 = 1 费，收益还挺高」——被动、不吃能量、每回合都生效。
+    assert reward_score("KNIGHT'S ARMOR", db, 38, 40) > reward_score("WOODEN SWORD", db, 38, 40)
+    assert pick_reward(["WOODEN SWORD", "KNIGHT'S ARMOR"], db, hp=38, max_hp=40) == 1
     print("PASS reward pick")
 
 

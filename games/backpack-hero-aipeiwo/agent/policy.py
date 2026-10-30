@@ -81,6 +81,39 @@ EXPLORE_THREAT_CAP = 10.0
 # 别把它设成 50——会和 LOOT_SCORE 打平，胜负取决于 legal 里的顺序。
 SURVIVAL_PRIOR = 40.0
 
+# ---- 护甲流的定价（用户口径，2026-10-30）----
+#
+# 「每回合 7 护甲 ≈ 1 费」：ROUGH BUCKLER（1 费 / 7 挡）是实测基准。
+# 而**每回合自动给甲**的防具（帽子/手套/鞋子/衣服）等于每回合白赚一份格挡、
+# 还不吃能量——所以它的价值必须按「回合数 × 每回合的甲」折现，不能只看一次性的 block。
+#
+# 以前 `item_value` 只给 `block_per_turn * 0.5`（Knight's Armor 6/turn = 5.0 分），
+# 比一把木剑（账本 5.4）还低——于是「腾位」时第一件被丢的正是护甲，和主流打法反着来。
+#
+# FIGHT_TURNS：M4 六局实测 30 个 end_turn / 8 场 ≈ 3.75 回合，取 3 保守一点
+# （第一回合往往还没吃到整套甲，而且甲超过当回合 incoming 就是浪费）。
+BLOCK_PER_ENERGY = 7.0
+FIGHT_TURNS = 3.0
+# 1 点能量折成多少「分数」：reward_score 里 1 费 7 伤的武器 = 7 × 2.0 = 14。
+ENERGY_SCORE = 14.0
+# 1 点能量折成多少「等价伤害」：账本实测木剑 5.4 净伤 / 1 费（M2 交叉验证）。
+DAMAGE_PER_ENERGY = 5.4
+
+
+def per_turn_energy(block_per_turn: float) -> float:
+    """每回合 N 甲 → 等效能量数（7 甲 = 1 费，按 FIGHT_TURNS 回合折现）。
+
+    `per_turn_energy(7) == 3.0`：一件 7 甲/回合的防具，一场三回合的战斗里相当于白送 3 费。
+    """
+    if block_per_turn is None or block_per_turn <= 0:
+        return 0.0
+    return block_per_turn / BLOCK_PER_ENERGY * FIGHT_TURNS
+
+
+def per_turn_value(block_per_turn: float) -> float:
+    """每回合 N 甲 → 等价伤害值（单位与账本一致，给「该留哪件 / 该丢哪件」用）。"""
+    return per_turn_energy(block_per_turn) * DAMAGE_PER_ENERGY
+
 # 一点能量值多少分。只在背包里没有任何已知攻击物品时当兜底。
 ENERGY_VALUE_DEFAULT = 6.0
 
@@ -470,7 +503,10 @@ def reward_score(name: str, db: ItemDB | None, hp: int = 0, max_hp: int = 0) -> 
         urgency = 1.0 + 2.0 * (missing / float(max_hp))
         score += min(st.heal, missing) * SUSTAIN_WEIGHT * urgency
     score += st.damage_active / max(1, st.energy_cost) * 2.0
-    score += st.block_active * 0.5 + st.block_per_turn * 1.5
+    # 每回合护甲按「7 甲 = 1 费 × FIGHT_TURNS 回合」折现，不再是一点 1.5 分的零头。
+    # 6 甲/回合的 Knight's Armor ≈ 2.57 费 ≈ 36 分，压过一把 1 费 7 伤的剑（14 分）——
+    # 这正是「护甲流」的定价：被动、不吃能量、每回合都生效。
+    score += st.block_active * 0.5 + per_turn_energy(st.block_per_turn) * ENERGY_SCORE
     score += st.max_hp_gain * 2.0
     if st.category == "relic":
         score += 1.0

@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from policy import per_turn_value
+
 Cell = tuple[int, int]
 
 # 一个「背包格子」的四个邻格方向（只用来给落点排序，不影响合法性）
@@ -494,7 +496,15 @@ def item_value(name: str, ledger: Any, db: Any = None) -> float:
             elif st.category == "relic":
                 value += 3.0
             elif st.block_per_turn > 0:
-                value += 2.0 + st.block_per_turn * 0.5
+                # 每回合护甲 = 每回合白赚一份格挡，按「7 甲 = 1 费 × 3 回合」折现
+                # （Knight's Armor 6/turn ≈ 14 等价伤害，木剑账本 5.4）。
+                # 以前这里是 `2.0 + block_per_turn * 0.5`（6/turn = 5.0），
+                # 比木剑还低，腾位时第一件被丢的就是护甲。
+                value += 1.0 + per_turn_value(st.block_per_turn)
+            elif st.block > 0:
+                # 只有一次性格挡、账本又没样本时也别当成 0.5：
+                # 一件没试过的 7 挡盾牌，静态值给 0.5 会被第一个丢掉。
+                value += 0.5 + st.block * 0.5
             elif st.category == "support":
                 value += 1.0 + (st.support_damage + st.support_block) * 0.3
             elif st.category == "attack":

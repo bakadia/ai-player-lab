@@ -652,6 +652,31 @@ damage, items[{uid,name,hazard}]}`，`damage` 是按上面公式**自己算的**
   真正该做的是「别让自己在事件前把背包塞满」。
 
 
+## E26 · `support_damage += abs(value)` 把 -999 哨兵算成 +999，顶出 300 分的假条目
+
+**怎么发现的**：给「护甲流定价」做全库排序时，前 5 名全都是 **300.70**，而且都是
+`support` 类（Ballista / Bashing Shield / Candy Pail / Ghost Gem / Venom Sword）。
+
+根因在 `agent/itemdb.py` 的「给**别的**道具加成」那段：
+
+```python
+support_damage += abs(value)        # 没有哨兵保护
+```
+
+prefab 上的 `-999` 是哨兵（见 E20），`abs(-999)` → **+999**，乘 0.3 就是 300 分。
+`Block` 那条用 `max(0.0, value)` 恰好挡住了负数，所以只有 `Damage` 这一支中招。
+
+**后果**：这 5 件在 `drop_ranking` 里永远排最后（永远不丢），也会污染 N 选 1 的排序；
+但它不会让 agent 变强，只是**把「不知道」当成了「无敌」**。
+
+**修法**：`|value| >= 900` 一律当 0（`SENTINEL`），并对单件加成上钳到 50（`MAX_SUPPORT`）。
+修完全库最高值 19.51（Plate Armor 8 甲/回合），中位数 0.5，分布正常。
+
+**以后**：所有从 prefab 读出来的数值都要先问一句「这会不会是 -999」。
+`itemdb` 里已经有 `SENTINEL` 常量，新加的字段直接复用，别各写各的。
+
+
+
 
 
 

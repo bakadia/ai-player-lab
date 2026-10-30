@@ -258,6 +258,58 @@ def test_repack_steps_are_executable():
     print("PASS repack steps executable")
 
 
+def test_armor_priced_above_sword():
+    """护甲流定价：每回合 7 甲 ≈ 1 费 × FIGHT_TURNS 回合，护甲不该比木剑先被丢。
+
+    用户口径（2026-10-30）：帽子/手套/鞋子/衣服每回合自动给甲，
+    「7 护甲 = 1 费，收益还挺高」。以前 `item_value` 只给 `0.5×每回合甲`，
+    Knight's Armor（6/turn）拿 5.0 分，比木剑（账本 5.4）还低 —— 腾位时先丢护甲。
+    """
+    from itemdb import ItemDB
+    from policy import FIGHT_TURNS, per_turn_energy, per_turn_value
+
+    assert per_turn_energy(7.0) == FIGHT_TURNS, per_turn_energy(7.0)
+    assert per_turn_energy(0.0) == 0.0
+    assert per_turn_value(7.0) > per_turn_value(6.0) > 0.0
+
+    class Ledger:
+        def __init__(self, data):
+            self.data = data
+
+        def estimate_damage(self, name):
+            return self.data.get(name, {}).get("damage")
+
+        def estimate_block(self, name):
+            return self.data.get(name, {}).get("block", 0.0)
+
+        def effect_score(self, name):
+            return 0.0
+
+    db = ItemDB.load()
+    led = Ledger({"WOODEN SWORD": {"damage": 5.4}})          # 账本实测净伤
+    from backpack import item_value
+
+    sword = item_value("WOODEN SWORD", led, db)
+    armor = item_value("KNIGHT'S ARMOR", led, db)            # 6 甲/回合、4 格
+    assert armor > sword * 1.5, (armor, sword)
+
+    # 背包里同时有甲 / 剑 / 杂物时，丢的顺序必须是「杂物 → 剑 → 甲」。
+    # 注意「唯一的主力输出不丢」那条保护仍然生效（剑只有一把时会进 kept），
+    # 所以这里直接看 `drop_ranking` 的顺序，而不是只看 choose_drop 的第一个。
+    specs = [
+        ("i1", "KNIGHT'S ARMOR", True, [(0, 0), (1, 0), (0, 1), (1, 1)], Q2),
+        ("i3", "ROCK", True, [(1, 2)], S1),
+    ]
+    bag = bag_of(rect(0, 0, 2, 3), specs)
+    led2 = Ledger({"WOODEN SWORD": {"damage": 5.4}, "ROCK": {"damage": 0.0}})
+    from backpack import drop_ranking
+
+    order = [it.name for _v, it in drop_ranking(bag, led2, db=db)]
+    assert order and order[0] == "ROCK", order
+    assert order[-1] == "KNIGHT'S ARMOR", order
+    print("PASS armor priced above sword")
+
+
 def test_choose_drop_by_value():
     class Ledger:
         def __init__(self, data):
@@ -406,6 +458,7 @@ def main():
     test_plan_swap()
     test_repack_steps_are_executable()
     test_choose_drop_by_value()
+    test_armor_priced_above_sword()
     test_real_probe_if_present()
     test_place_with_room_drops_lowest_value()
     test_place_with_room_respects_zero_budget()

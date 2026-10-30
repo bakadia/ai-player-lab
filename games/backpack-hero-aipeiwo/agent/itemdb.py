@@ -63,6 +63,11 @@ UTILITY_TYPES = frozenset({"Key", "Gold", "Mana", "ManaStone", "Ingredient", "Pr
 # ItemType 里代表「稀有/唯一」
 RELIC_TYPE = "Relic"
 
+# prefab 上的 -999 哨兵（PITFALLS E20）：效果里出现它就不是真数值。
+SENTINEL = 900.0
+# 「给别的道具」的加成再做一次上钳：单件道具给 50 点已经离谱，999 一定是脏数据。
+MAX_SUPPORT = 50.0
+
 
 def _rev(table: dict[str, int] | None) -> dict[int, str]:
     return {int(v): k for k, v in (table or {}).items()}
@@ -288,11 +293,16 @@ def _classify_one(
             value = float(eff.get("value") or 0)
         except (TypeError, ValueError):
             value = 0.0
+        # prefab 上的 -999 是哨兵（PITFALLS E20），不是「给别的道具 999 点伤害」。
+        # 以前只有 `Block` 用 max(0,…) 挡住了它，`Damage` 走的是 abs() → 300 分的假条目
+        # （Ballista / Bashing Shield / Ghost Gem 都中过），腾位时它们会永远排最后。
+        if abs(value) >= SENTINEL:
+            value = 0.0
         if name == "Damage":
-            support_damage += abs(value)
+            support_damage += min(abs(value), MAX_SUPPORT)
             meaningful_support += 1
         elif name == "Block":
-            support_block += max(0.0, value)
+            support_block += min(max(0.0, value), MAX_SUPPORT)
             meaningful_support += 1
         elif name in DEBUFF_STATUSES or name in BUFF_STATUSES or name in ("MaxHP", "MaxHPPassive", "Luck"):
             meaningful_support += 1
