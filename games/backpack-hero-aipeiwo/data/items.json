@@ -42,11 +42,30 @@
       "damage_sum": 0,
       "effects": {
         "heal": {
-          "count": 3,
-          "sum": 24.0
+          "count": 4,
+          "sum": 32.0
         }
       },
-      "samples": 3
+      "samples": 4
+    },
+    "CANDY": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "luck:legendary": {
+          "count": 1,
+          "sum": 1.5
+        },
+        "luck:rare": {
+          "count": 1,
+          "sum": 3.0
+        },
+        "luck:uncommon": {
+          "count": 1,
+          "sum": 6.0
+        }
+      },
+      "samples": 1
     },
     "CANDY APPLE": {
       "block_sum": 0,
@@ -142,14 +161,18 @@
     },
     "FIRE STAR": {
       "block_sum": 0,
-      "damage_sum": 7,
+      "damage_sum": 10,
       "effects": {
         "status:fire:enemy": {
-          "count": 2,
-          "sum": 6.0
+          "count": 3,
+          "sum": 9.0
+        },
+        "status:rage:enemy": {
+          "count": 1,
+          "sum": 1.0
         }
       },
-      "samples": 3
+      "samples": 4
     },
     "HEAT POTION": {
       "block_sum": 0,
@@ -174,22 +197,22 @@
     },
     "LUCKY STAR": {
       "block_sum": 0,
-      "damage_sum": 9,
+      "damage_sum": 19,
       "effects": {
         "luck:legendary": {
-          "count": 2,
-          "sum": 2.0
-        },
-        "luck:rare": {
-          "count": 2,
+          "count": 4,
           "sum": 4.0
         },
-        "luck:uncommon": {
-          "count": 2,
+        "luck:rare": {
+          "count": 4,
           "sum": 8.0
+        },
+        "luck:uncommon": {
+          "count": 4,
+          "sum": 16.0
         }
       },
-      "samples": 2
+      "samples": 4
     },
     "MACHETE": {
       "absorbed_sum": 3,
@@ -281,10 +304,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 3675,
+      "block_sum": 4060,
       "damage_sum": 0,
       "effects": {},
-      "samples": 525
+      "samples": 580
     },
     "ROW CHAIN STAR": {
       "block_sum": 0,
@@ -340,6 +363,13 @@
       },
       "samples": 5
     },
+    "SUNFLOWER SHIV": {
+      "absorbed_sum": 5,
+      "block_sum": 0,
+      "damage_sum": 19,
+      "effects": {},
+      "samples": 11
+    },
     "THROWING STAR": {
       "block_sum": 0,
       "damage_sum": 12,
@@ -359,7 +389,7 @@
     },
     "TOY MACHETE": {
       "block_sum": 0,
-      "damage_sum": 24,
+      "damage_sum": 30,
       "effects": {
         "status:dodge:enemy": {
           "count": 1,
@@ -370,11 +400,11 @@
           "sum": 2.0
         },
         "status:rage:player": {
-          "count": 8,
-          "sum": 8.0
+          "count": 10,
+          "sum": 10.0
         }
       },
-      "samples": 8
+      "samples": 10
     },
     "WARM DRINK": {
       "block_sum": 0,
@@ -388,13 +418,13 @@
       "samples": 2
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 1321,
+      "absorbed_sum": 1431,
       "block_sum": 0,
-      "damage_sum": 6409,
+      "damage_sum": 6886,
       "effects": {
         "gold": {
-          "count": 3,
-          "sum": 26.0
+          "count": 4,
+          "sum": 37.0
         },
         "luck:legendary": {
           "count": 2,
@@ -421,15 +451,15 @@
           "sum": 3.0
         },
         "status:rage:enemy": {
-          "count": 92,
-          "sum": 92.0
+          "count": 97,
+          "sum": 97.0
         },
         "status:spikes:player": {
           "count": 2,
           "sum": 2.0
         }
       },
-      "samples": 1213
+      "samples": 1305
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
