@@ -13,7 +13,14 @@ description: Use when driving a Backpack Hero run for this repo (starting a run,
 python tools\ai_play.py status            # 只看（不推进）
 python tools\ai_play.py play --steps 25   # 推进最多 25 步 -> 回 ai.digest.v1
 python tools\ai_play.py new-run           # 死了/卡了重开
+python tools\ai_play.py autoplay --runs 2 --steps 120 --minutes 30   # 无人值守打 N 局
 ```
+
+`autoplay` 是 M2 的产物：循环 `play`，死亡/回菜单/卡死自动 `new-run`，结束打一份
+`ai.autoplay.v1` 战绩（floor/level/battles/hp_per_battle/hazard_paid）。
+
+**卡死判据是「进度指纹」**（mode, floor, hp, level, battles），不是 `seq`——
+`seq` 每帧都涨，`run 2` 在地图上绕圈时它一直在变，用 `seq` 永远判不出卡死。
 
 一次 `play` 内部跑 `agent/loop.py --max-steps N`，用的是已经验证过的几何摆放 + 启发式战斗。
 **你的工作是看 digest 做决定，不是替它点每一个动作。** 一次 20–40 步比较合适：
