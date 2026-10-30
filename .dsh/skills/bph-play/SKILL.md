@@ -52,6 +52,18 @@ python tools\ai_play.py autoplay --runs 2 --steps 120 --minutes 30   # 无人值
 - `bag_full` → 要么接受不再捡，要么丢一件换一件。
 - `dialogue` → N 选 1，按 `bph-builds` 的优先级挑。
 
+## 想看「直播效果」长什么样
+
+```powershell
+python tools\bph_live.py                      # 终端实时看板（2Hz，Ctrl+C 停）
+python tools\bph_live.py --seconds 20         # 只看 20 秒
+python tools\bph_live.py --html live.html     # 生成 HTML 快照（可截图/发人）
+```
+
+面板内容 = 楼层/血条/等级、敌人与 incoming、背包 ASCII 网格 + 图例、事件滚动、
+鲸鱼娘一句话（**只用 digest 里的事实**，模板生成）。这正是 M4 直播插件要渲染的东西，
+先用它试信息密度和解说口吻，觉得行再搬进插件。
+
 ## 什么时候别用 `play`
 
 - 想知道「为什么这步这么做」→ `python tools\ab_m4.py data\runs\ab\... --verbose` 或直接读 jsonl。

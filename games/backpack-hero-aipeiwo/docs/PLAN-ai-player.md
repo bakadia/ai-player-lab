@@ -71,6 +71,7 @@ DSH 里 UI 是 **client 插件**（Slot + React），游戏状态在**磁盘上*
 | **M1** ✅ | `ai_play.py` 批处理 + 3 个 skill | 会话能 play → 读 digest → 处理 needs → 继续（已实测） |
 | **M2** ✅ | `autoplay`：无人值守打完多局 | 2 局全程无人工；见 §2.1 |
 | **M3** | host 半边 `bph.live`（文件→service） | 面板能实时看到血/楼层/背包，延迟 < 1s |
+| **M2.5** ✅ | 面板预览：终端看板 + HTML 快照（`tools/bph_live.py`） | 不用插件就能判断信息密度和解说口吻 |
 | **M4** | client 直播间面板 + 事件滚动 | 在现有 GUI 里能看一整局不动手 |
 | **M5** | 鲸鱼娘解说（模板 + 低频模型） | 每场战斗后有话说，且不胡说（事实来自 digest） |
 | **M6** | 一局完整直播跑通 | 无人值守 1 小时，画面/解说/数据都在 |
@@ -109,6 +110,21 @@ DSH 里 UI 是 **client 插件**（Slot + React），游戏状态在**磁盘上*
 
 ## 4. 现在就能做的下一件事
 
-**M2**：把「一局打完」变成脚本 —— 在 `ai_play.py` 上加 `autoplay`（循环 play + 自动处理
-`level_up` / `loot` / `hazard` / `dead`），跑通后再接 M3 的面板。
-这一步不需要新插件，纯 Python，当天能验收。
+**M3**（host 半边）：`tools/bph_live.py` 已经把「面板要展示什么」验证过了
+（楼层/血条/敌人 incoming/背包网格+图例/事件滚动/鲸鱼娘一句话，2Hz 节流）。
+M3 就是把这套渲染逻辑换成「读文件 → 归一成 `bph.live` → 推给 client」，
+渲染部分直接搬 M4 的 React 组件。
+
+## 5. 面板预览（M2.5，已完成）
+
+```powershell
+python tools\bph_live.py                    # 终端实时看板
+python tools\bph_live.py --html live.html   # 一次性快照（截图/发人用）
+```
+
+- 终端版：2Hz 刷新、ANSI 血条、背包 ASCII 网格 + 字母图例、事件滚动、解说一句。
+- HTML 版：深色「直播间」卡片（红点 LIVE、血条、敌人、网格、气泡），
+  可以直接在浏览器打开截图，用来判断配色/信息密度。
+- 解说目前是模板：`hp/max_hp`、敌人数与 incoming、模式、死亡 —— **只引用 state 里的字段**，
+  不会编造。以后换成模型时，输入就是同一份 digest。
+
