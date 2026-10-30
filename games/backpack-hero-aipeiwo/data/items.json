@@ -3,9 +3,18 @@
     "ACIDIC POTION": {
       "absorbed_sum": 12,
       "block_sum": 0,
-      "damage_sum": 32,
-      "effects": {},
-      "samples": 2
+      "damage_sum": 80,
+      "effects": {
+        "status:dodge:enemy": {
+          "count": 1,
+          "sum": 1.0
+        },
+        "status:rage:enemy": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 4
     },
     "BLESSED HERB": {
       "block_sum": 0,
@@ -42,38 +51,57 @@
       "damage_sum": 0,
       "effects": {
         "heal": {
-          "count": 4,
-          "sum": 32.0
+          "count": 5,
+          "sum": 40.0
         }
       },
-      "samples": 4
+      "samples": 5
     },
     "CANDY": {
       "block_sum": 0,
       "damage_sum": 0,
       "effects": {
+        "heal": {
+          "count": 3,
+          "sum": 9.0
+        },
         "luck:legendary": {
-          "count": 1,
-          "sum": 1.5
+          "count": 4,
+          "sum": 6.0
         },
         "luck:rare": {
-          "count": 1,
-          "sum": 3.0
+          "count": 4,
+          "sum": 12.0
         },
         "luck:uncommon": {
-          "count": 1,
-          "sum": 6.0
+          "count": 4,
+          "sum": 24.0
         }
       },
-      "samples": 1
+      "samples": 4
     },
     "CANDY APPLE": {
       "block_sum": 0,
       "damage_sum": 0,
       "effects": {
         "heal": {
-          "count": 1,
+          "count": 3,
+          "sum": 28.0
+        },
+        "item_status:locked": {
+          "count": 4,
           "sum": 8.0
+        }
+      },
+      "samples": 3
+    },
+    "CAVE FISH": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "status:regen:player": {
+          "count": 1,
+          "sum": 4.0
         }
       },
       "samples": 1
@@ -128,14 +156,14 @@
     },
     "DART": {
       "block_sum": 0,
-      "damage_sum": 40,
+      "damage_sum": 90,
       "effects": {
         "status:rage:enemy": {
-          "count": 1,
-          "sum": 1.0
+          "count": 2,
+          "sum": 2.0
         }
       },
-      "samples": 2
+      "samples": 4
     },
     "DEBUFF POTION": {
       "block_sum": 0,
@@ -159,6 +187,17 @@
       "energy_sum": 2,
       "samples": 1
     },
+    "EMPTY CUP": {
+      "block_sum": 0,
+      "damage_sum": 6,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 1
+    },
     "FIRE STAR": {
       "block_sum": 0,
       "damage_sum": 10,
@@ -173,6 +212,13 @@
         }
       },
       "samples": 4
+    },
+    "HATCHET": {
+      "absorbed_sum": 3,
+      "block_sum": 0,
+      "damage_sum": 20,
+      "effects": {},
+      "samples": 11
     },
     "HEAT POTION": {
       "block_sum": 0,
@@ -197,34 +243,34 @@
     },
     "LUCKY STAR": {
       "block_sum": 0,
-      "damage_sum": 19,
+      "damage_sum": 29,
       "effects": {
         "luck:legendary": {
-          "count": 4,
-          "sum": 4.0
+          "count": 6,
+          "sum": 6.0
         },
         "luck:rare": {
-          "count": 4,
-          "sum": 8.0
+          "count": 6,
+          "sum": 12.0
         },
         "luck:uncommon": {
-          "count": 4,
-          "sum": 16.0
+          "count": 6,
+          "sum": 24.0
         }
       },
-      "samples": 4
+      "samples": 6
     },
     "MACHETE": {
       "absorbed_sum": 3,
       "block_sum": 0,
-      "damage_sum": 9,
+      "damage_sum": 15,
       "effects": {
         "status:rage:enemy": {
-          "count": 2,
-          "sum": 2.0
+          "count": 3,
+          "sum": 3.0
         }
       },
-      "samples": 2
+      "samples": 3
     },
     "MAGICAL HERB": {
       "block_sum": 0,
@@ -304,10 +350,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 4060,
+      "block_sum": 4865,
       "damage_sum": 0,
       "effects": {},
-      "samples": 580
+      "samples": 695
     },
     "ROW CHAIN STAR": {
       "block_sum": 0,
@@ -322,9 +368,14 @@
     },
     "SHIV": {
       "block_sum": 0,
-      "damage_sum": 12,
-      "effects": {},
-      "samples": 6
+      "damage_sum": 20,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 10
     },
     "SMELT": {
       "block_sum": 0,
@@ -337,31 +388,38 @@
       },
       "samples": 1
     },
+    "SPAGHETTI": {
+      "block_sum": 10,
+      "damage_sum": 0,
+      "effects": {},
+      "energy_sum": 1,
+      "samples": 1
+    },
     "SPOILED MILK": {
-      "block_sum": 144,
+      "block_sum": 216,
       "damage_sum": 0,
       "effects": {
         "status:poison:player": {
-          "count": 6,
-          "sum": 12.0
+          "count": 10,
+          "sum": 20.0
         }
       },
-      "samples": 8
+      "samples": 12
     },
     "STACKING STAR": {
       "block_sum": 0,
-      "damage_sum": 15,
+      "damage_sum": 24,
       "effects": {
         "items:spawned": {
-          "count": 5,
-          "sum": 5.0
+          "count": 8,
+          "sum": 8.0
         },
         "status:rage:enemy": {
           "count": 1,
           "sum": 1.0
         }
       },
-      "samples": 5
+      "samples": 8
     },
     "SUNFLOWER SHIV": {
       "absorbed_sum": 5,
@@ -372,9 +430,14 @@
     },
     "THROWING STAR": {
       "block_sum": 0,
-      "damage_sum": 12,
-      "effects": {},
-      "samples": 2
+      "damage_sum": 30,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 5
     },
     "TOXIC KUNAI": {
       "block_sum": 0,
@@ -389,77 +452,85 @@
     },
     "TOY MACHETE": {
       "block_sum": 0,
-      "damage_sum": 30,
+      "damage_sum": 36,
       "effects": {
         "status:dodge:enemy": {
           "count": 1,
           "sum": 1.0
         },
         "status:rage:enemy": {
-          "count": 2,
-          "sum": 2.0
+          "count": 4,
+          "sum": 4.0
         },
         "status:rage:player": {
-          "count": 10,
-          "sum": 10.0
+          "count": 12,
+          "sum": 12.0
         }
       },
-      "samples": 10
+      "samples": 12
     },
     "WARM DRINK": {
       "block_sum": 0,
       "damage_sum": 0,
       "effects": {
         "heal": {
-          "count": 2,
-          "sum": 20.0
+          "count": 3,
+          "sum": 24.0
+        },
+        "items:spawned": {
+          "count": 1,
+          "sum": 1.0
         }
       },
-      "samples": 2
+      "samples": 3
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 1431,
+      "absorbed_sum": 1680,
       "block_sum": 0,
-      "damage_sum": 6886,
+      "damage_sum": 8064,
       "effects": {
         "gold": {
           "count": 4,
           "sum": 37.0
         },
+        "item_status:locked": {
+          "count": 4,
+          "sum": 4.0
+        },
         "luck:legendary": {
-          "count": 2,
-          "sum": 4.5
+          "count": 4,
+          "sum": 54.5
         },
         "luck:rare": {
-          "count": 2,
-          "sum": 9.0
+          "count": 4,
+          "sum": 109.0
         },
         "luck:uncommon": {
-          "count": 2,
-          "sum": 18.0
+          "count": 4,
+          "sum": 218.0
         },
         "status:dodge:enemy": {
-          "count": 1,
-          "sum": 1.0
+          "count": 2,
+          "sum": 2.0
         },
         "status:fire:player": {
-          "count": 7,
-          "sum": 9.0
+          "count": 8,
+          "sum": 10.0
         },
         "status:poison:player": {
-          "count": 2,
-          "sum": 3.0
+          "count": 4,
+          "sum": 5.0
         },
         "status:rage:enemy": {
-          "count": 97,
-          "sum": 97.0
+          "count": 108,
+          "sum": 108.0
         },
         "status:spikes:player": {
           "count": 2,
           "sum": 2.0
         }
       },
-      "samples": 1305
+      "samples": 1525
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
