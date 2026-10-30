@@ -143,6 +143,45 @@
       "energy_sum": 1,
       "samples": 1
     },
+    "COOL DRINK": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "items:spawned": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "energy_sum": 1,
+      "samples": 1
+    },
+    "CURSED POTION": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "items:spawned": {
+          "count": 1,
+          "sum": 1.0
+        },
+        "luck:legendary": {
+          "count": 1,
+          "sum": 4.0
+        },
+        "luck:rare": {
+          "count": 1,
+          "sum": 8.0
+        },
+        "luck:uncommon": {
+          "count": 1,
+          "sum": 16.0
+        },
+        "phase:inventory:3": {
+          "count": 1,
+          "sum": 1.0
+        }
+      },
+      "samples": 1
+    },
     "DAMAGED KNIFE": {
       "block_sum": 0,
       "damage_sum": 41,
@@ -156,14 +195,14 @@
     },
     "DART": {
       "block_sum": 0,
-      "damage_sum": 90,
+      "damage_sum": 110,
       "effects": {
         "status:rage:enemy": {
           "count": 2,
           "sum": 2.0
         }
       },
-      "samples": 4
+      "samples": 5
     },
     "DEBUFF POTION": {
       "block_sum": 0,
@@ -200,14 +239,14 @@
     },
     "EMPTY CUP": {
       "block_sum": 0,
-      "damage_sum": 6,
+      "damage_sum": 12,
       "effects": {
         "status:rage:enemy": {
           "count": 1,
           "sum": 1.0
         }
       },
-      "samples": 1
+      "samples": 2
     },
     "FIRE STAR": {
       "block_sum": 0,
@@ -247,29 +286,29 @@
       "samples": 1
     },
     "LIQUID ARMOR": {
-      "block_sum": 100,
+      "block_sum": 125,
       "damage_sum": 0,
       "effects": {},
-      "samples": 4
+      "samples": 5
     },
     "LUCKY STAR": {
       "block_sum": 0,
-      "damage_sum": 29,
+      "damage_sum": 39,
       "effects": {
         "luck:legendary": {
-          "count": 6,
-          "sum": 6.0
+          "count": 8,
+          "sum": 8.0
         },
         "luck:rare": {
-          "count": 6,
-          "sum": 12.0
+          "count": 8,
+          "sum": 16.0
         },
         "luck:uncommon": {
-          "count": 6,
-          "sum": 24.0
+          "count": 8,
+          "sum": 32.0
         }
       },
-      "samples": 6
+      "samples": 8
     },
     "MACHETE": {
       "absorbed_sum": 3,
@@ -354,17 +393,28 @@
       "damage_sum": 0,
       "effects": {
         "heal": {
+          "count": 2,
+          "sum": 40.0
+        }
+      },
+      "samples": 2
+    },
+    "ROGUE'S MASK": {
+      "block_sum": 0,
+      "damage_sum": 0,
+      "effects": {
+        "status:dodge:player": {
           "count": 1,
-          "sum": 20.0
+          "sum": 1.0
         }
       },
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 5285,
+      "block_sum": 5747,
       "damage_sum": 0,
       "effects": {},
-      "samples": 755
+      "samples": 821
     },
     "ROW CHAIN STAR": {
       "block_sum": 0,
@@ -423,37 +473,42 @@
       "samples": 1
     },
     "SPOILED MILK": {
-      "block_sum": 324,
+      "block_sum": 360,
       "damage_sum": 0,
       "effects": {
         "status:poison:player": {
-          "count": 16,
-          "sum": 32.0
+          "count": 18,
+          "sum": 36.0
         }
       },
-      "samples": 18
+      "samples": 20
     },
     "STACKING STAR": {
       "block_sum": 0,
-      "damage_sum": 24,
+      "damage_sum": 30,
       "effects": {
         "items:spawned": {
-          "count": 8,
-          "sum": 8.0
+          "count": 10,
+          "sum": 10.0
         },
         "status:rage:enemy": {
           "count": 1,
           "sum": 1.0
         }
       },
-      "samples": 8
+      "samples": 10
     },
     "SUNFLOWER SHIV": {
-      "absorbed_sum": 5,
+      "absorbed_sum": 7,
       "block_sum": 0,
-      "damage_sum": 19,
-      "effects": {},
-      "samples": 11
+      "damage_sum": 43,
+      "effects": {
+        "status:rage:enemy": {
+          "count": 2,
+          "sum": 2.0
+        }
+      },
+      "samples": 24
     },
     "THROWING STAR": {
       "block_sum": 0,
@@ -468,18 +523,18 @@
     },
     "TOXIC KUNAI": {
       "block_sum": 0,
-      "damage_sum": 6,
+      "damage_sum": 12,
       "effects": {
         "status:poison:enemy": {
-          "count": 2,
-          "sum": 12.0
+          "count": 4,
+          "sum": 24.0
         }
       },
-      "samples": 1
+      "samples": 2
     },
     "TOY MACHETE": {
       "block_sum": 0,
-      "damage_sum": 36,
+      "damage_sum": 42,
       "effects": {
         "status:dodge:enemy": {
           "count": 1,
@@ -490,11 +545,11 @@
           "sum": 4.0
         },
         "status:rage:player": {
-          "count": 12,
-          "sum": 12.0
+          "count": 14,
+          "sum": 14.0
         }
       },
-      "samples": 12
+      "samples": 14
     },
     "WARM DRINK": {
       "block_sum": 0,
@@ -512,13 +567,13 @@
       "samples": 3
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 1909,
+      "absorbed_sum": 2114,
       "block_sum": 0,
-      "damage_sum": 9067,
+      "damage_sum": 9789,
       "effects": {
         "gold": {
-          "count": 4,
-          "sum": 37.0
+          "count": 5,
+          "sum": 48.0
         },
         "item_status:locked": {
           "count": 14,
@@ -545,23 +600,23 @@
           "sum": 2.0
         },
         "status:fire:player": {
-          "count": 9,
-          "sum": 11.0
+          "count": 10,
+          "sum": 14.0
         },
         "status:poison:player": {
           "count": 4,
           "sum": 5.0
         },
         "status:rage:enemy": {
-          "count": 121,
-          "sum": 121.0
+          "count": 125,
+          "sum": 125.0
         },
         "status:spikes:player": {
           "count": 3,
           "sum": 3.0
         }
       },
-      "samples": 1719
+      "samples": 1860
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
