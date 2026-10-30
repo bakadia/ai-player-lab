@@ -68,6 +68,59 @@ SENTINEL = 900.0
 # 「给别的道具」的加成再做一次上钳：单件道具给 50 点已经离谱，999 一定是脏数据。
 MAX_SUPPORT = 50.0
 
+# 「相邻/相对位置」协同：桥接 v8.25 把悬停卡片上的句子原样抓下来了，例如
+#   Knight's Armor : "Armor items and Shields adjacent to this or diagonal to this get /x Block"
+#   Tower Shield   : "Armor items to the left get /x Block to self"
+#   Bronze Breastplate: "Weapons adjacent to this get /x Damage"
+# 游戏用 `/x` 顶替数值（真值在 effects 里），所以**只解析「谁 / 哪个区域 / 加什么」**，
+# 数值用 support_block / support_damage（`itemdb` 已经从 modifiers 里算出来了）。
+_ARMOR_WORD = ("armor item", "armour item", "shield")
+_WEAPON_WORD = ("weapon", "sword", "axe", "spear", "dagger", "mace")
+
+
+def _parse_synergy(descs: Any) -> tuple[bool, bool, str, float, float]:
+    """从运行时描述里读出「给相邻护甲/武器加成」。返回 (护甲, 武器, 区域, 格挡, 伤害)。"""
+    helps_armor = False
+    helps_weapons = False
+    area = ""
+    block = 0.0
+    dmg = 0.0
+    for d in descs or ():
+        low = str(d).lower()
+        if " get " not in low and "gets " not in low:
+            continue
+        # 区域：一个描述里可能同时有 adjacent 和 diagonal
+        if "diagonal" in low and "adjacent" in low:
+            area = "adjacent+diagonal"
+        elif "diagonal" in low:
+            area = "diagonal"
+        elif "adjacent" in low:
+            area = "adjacent"
+        elif "to the left" in low:
+            area = "left"
+        elif "to the right" in low:
+            area = "right"
+        elif "above" in low:
+            area = "above"
+        elif "below" in low:
+            area = "below"
+        elif "row" in low:
+            area = "row"
+        elif "column" in low:
+            area = "column"
+        target_armor = any(w in low for w in _ARMOR_WORD)
+        target_weapon = any(w in low for w in _WEAPON_WORD)
+        if target_armor:
+            helps_armor = True
+        if target_weapon:
+            helps_weapons = True
+        if "block" in low:
+            block = max(block, 1.0)     # 具体数值未知（/x），只记「有」
+        if "damage" in low:
+            dmg = max(dmg, 1.0)
+    return helps_armor, helps_weapons, area, block, dmg
+
+
 
 def _rev(table: dict[str, int] | None) -> dict[int, str]:
     return {int(v): k for k, v in (table or {}).items()}
@@ -102,6 +155,16 @@ class ItemStats:
     support_damage: float = 0.0
     support_block: float = 0.0
     modifier_count: int = 0
+    # 相邻/相对位置的协同（从运行时描述里读出来的，桥接 v8.25 的 description_runtime）。
+    # 例：Knight's Armor「Armor items and Shields adjacent or diagonal get +N Block」→
+    #     helps_armor=True, synergy_area="adjacent+diagonal", synergy_block=N。
+    # 这是「流派」唯一能拿到的结构化信号：摆放位置决定收益。
+    helps_armor: bool = False
+    helps_weapons: bool = False
+    synergy_area: str = ""
+    synergy_block: float = 0.0
+    synergy_damage: float = 0.0
+    description_runtime: tuple[str, ...] = ()
     category: str = "unknown"
     tags: frozenset[str] = frozenset()
     effect_count: int = 0
@@ -313,6 +376,18 @@ def _classify_one(
     if support_damage > 0 or support_block > 0 or meaningful_support > 0:
         tags.add("support")
 
+    helps_armor, helps_weapons, synergy_area, syn_block, syn_dmg = _parse_synergy(
+        raw.get("description_runtime") or [])
+    # 描述里的 `/x` 把数值藏起来了；真值在 modifiers 里（`support_block` / `support_damage`）。
+    if helps_armor and support_block > 0:
+        syn_block = support_block
+    if helps_weapons and support_damage > 0:
+        syn_dmg = support_damage
+    if helps_armor:
+        tags.add("synergy_armor")
+    if helps_weapons:
+        tags.add("synergy_weapon")
+
     types = [item_types.get(int(t), str(t)) for t in (raw.get("item_type") or [])]
     if RELIC_TYPE in types or int(raw.get("one_of_a_kind") or 0) != 0:
         tags.add("relic")
@@ -368,6 +443,12 @@ def _classify_one(
         support_damage=support_damage,
         support_block=support_block,
         modifier_count=modifier_count,
+        helps_armor=helps_armor,
+        helps_weapons=helps_weapons,
+        synergy_area=synergy_area,
+        synergy_block=syn_block,
+        synergy_damage=syn_dmg,
+        description_runtime=tuple(raw.get("description_runtime") or ()),
         category=category,
         tags=frozenset(tags),
         effect_count=len(own) + len(support),

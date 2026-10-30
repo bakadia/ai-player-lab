@@ -310,6 +310,36 @@ def test_armor_priced_above_sword():
     print("PASS armor priced above sword")
 
 
+def test_synergy_bias_prefers_armor_neighbors():
+    """E27：相邻加成的道具要贴着目标摆（描述里的 adjacent 是真实规则）。
+
+    `ANGEL BUCKLER` 的描述是「相邻的护甲 +3 格挡」（1 格），放在护甲旁边才有收益。
+    """
+    from itemdb import ItemDB
+    from place import synergy_bias
+
+    db = ItemDB.load()
+    st = db.get("ANGEL BUCKLER")
+    assert st is not None and st.helps_armor, st
+    assert st.synergy_block >= 1.0, st.synergy_block
+
+    specs = [("i1", "ROUGH BUCKLER", True, [(0, 0), (0, 1), (1, 0), (1, 1)], Q2)]
+    bag = bag_of(rect(0, 0, 5, 2), specs)
+    bias = synergy_bias(bag, "ANGEL BUCKLER", db)
+    assert bias is not None, "护甲在包里却没算出 bias"
+
+    class P:
+        def __init__(self, cells):
+            self.cells = cells
+
+    assert bias(P([(2, 0)])) == 1.0     # 紧贴护甲右边缘
+    assert bias(P([(4, 1)])) == 0.0     # 隔了两格，拿不到加成
+    # 背包里没有护甲时不该硬凑协同
+    empty = bag_of(rect(0, 0, 5, 2), [])
+    assert synergy_bias(empty, "ANGEL BUCKLER", db) is None
+    print("PASS synergy bias (adjacent armor)")
+
+
 def test_choose_drop_by_value():
     class Ledger:
         def __init__(self, data):
@@ -458,6 +488,7 @@ def main():
     test_plan_swap()
     test_repack_steps_are_executable()
     test_choose_drop_by_value()
+    test_synergy_bias_prefers_armor_neighbors()
     test_armor_priced_above_sword()
     test_real_probe_if_present()
     test_place_with_room_drops_lowest_value()

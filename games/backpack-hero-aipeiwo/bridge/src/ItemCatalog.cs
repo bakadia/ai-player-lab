@@ -310,6 +310,20 @@ namespace BphBridge
             w.Name("valid_for_zones").Raw(EnumList(it, "validForZones"));
             w.Name("valid_for_characters").Raw(EnumList(it, "validForCharacters"));
 
+            // 运行时描述：`descriptions[]` 里 833 件是空的（PITFALLS：物品描述是运行时拼的），
+            // 真正的人话在 `ModTextGen.main.Generate*Description(item, effect, ...)` 里。
+            // 这些字符串就是鼠标悬停时卡片上显示的那几句——**不用 OCR**。
+            // 对「护甲相邻加成 / 摆放位置不同效果不同」这类信息，这是唯一的结构化来源。
+            w.Name("description_runtime").BeginArray();
+            List<string> rt = RuntimeDescriptions(it);
+            for (int i = 0; i < rt.Count && i < 24; i++)
+            {
+                if (string.IsNullOrEmpty(rt[i])) continue;
+                w.Value(rt[i]);
+                ctx.Nodes++;
+            }
+            w.EndArray();
+
             EffectList(w, "energy_effects", it, "energyEffects", ctx);
             EffectList(w, "combat_effects", it, "combatEffects", ctx);
             EffectList(w, "movement_effects", it, "movementEffects", ctx);
@@ -324,6 +338,98 @@ namespace BphBridge
             DumpExtra(w, it, ctx);
 
             w.EndObject();
+        }
+
+        /// <summary>
+        /// 用游戏自己的文案生成器拼出「悬停卡片上那几句」。
+        ///
+        /// `ModTextGen.Generate*Description(item, effect, reload)` 是**静态方法**，
+        /// 返回已经本地化好的一句话（`reload=false` = 不要重建 UI）。
+        /// 一件出错就跳过那一句：903 件的 dump 不能因为某件描述抛异常整份作废。
+        /// </summary>
+        public static List<string> RuntimeDescriptions(Item2 it)
+        {
+            List<string> outList = new List<string>();
+            if (it == null) return outList;
+
+
+            try
+            {
+                IList combat = World.Field(it, "combatEffects") as IList;
+                for (int i = 0; combat != null && i < combat.Count; i++)
+                {
+                    string s = null;
+                    try
+                    {
+                        s = ModTextGen.GenerateCombatEffectDescription(
+                            it, combat[i] as Item2.CombattEffect, false);
+                    }
+                    catch { }
+                    Add(outList, s);
+                }
+            }
+            catch { }
+
+            try
+            {
+                IList movement = World.Field(it, "movementEffects") as IList;
+                for (int i = 0; movement != null && i < movement.Count; i++)
+                {
+                    string s = null;
+                    try
+                    {
+                        s = ModTextGen.GenerateMovementEffectDescription(
+                            it, movement[i] as Item2.MovementEffect, false);
+                    }
+                    catch { }
+                    Add(outList, s);
+                }
+            }
+            catch { }
+
+            try
+            {
+                IList mods = World.Field(it, "modifiers") as IList;
+                for (int i = 0; mods != null && i < mods.Count; i++)
+                {
+                    string s = null;
+                    try
+                    {
+                        s = ModTextGen.GenerateModifierDescription(it, mods[i] as Item2.Modifier, false);
+                    }
+                    catch { }
+                    Add(outList, s);
+                }
+            }
+            catch { }
+
+            try
+            {
+                IList adds = World.Field(it, "addModifiers") as IList;
+                for (int i = 0; adds != null && i < adds.Count; i++)
+                {
+                    string s = null;
+                    try
+                    {
+                        s = ModTextGen.GenerateAddModifierDescription(it, adds[i] as Item2.AddModifier, false);
+                    }
+                    catch { }
+                    Add(outList, s);
+                }
+            }
+            catch { }
+
+            return outList;
+        }
+
+        private static void Add(List<string> list, string s)
+        {
+            if (string.IsNullOrEmpty(s)) return;
+            s = s.Trim();
+            if (s.Length == 0) return;
+            if (s.IndexOf("Translation not found", StringComparison.Ordinal) >= 0) return;
+            if (list.Contains(s)) return;
+            list.Add(s);
         }
 
         /// <summary>不在契约里、但可能有用的小字段，原样给（游戏字段名）。</summary>

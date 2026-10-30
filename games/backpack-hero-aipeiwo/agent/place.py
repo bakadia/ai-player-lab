@@ -14,9 +14,66 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from backpack import Bag, choose_drop, item_value, plan_place
+from backpack import Bag, choose_drop, item_value, parse_cell, plan_place
 
 Log = Callable[[str], None]
+
+# 四邻 + 四对角：描述里的「adjacent」在游戏里既算上下左右，也常带 diagonal。
+_ADJ = ((1, 0), (-1, 0), (0, 1), (0, -1))
+_DIAG = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+
+
+def synergy_bias(bag: Bag, item_name: str, db: Any) -> Callable[[Any], float] | None:
+    """E27：给「相邻加成」类道具挑落点——贴着它要加成的目标摆。
+
+    `Knight's Armor` 是「相邻/对角的护甲 +N 格挡」、`Tower Shield` 是「左边的护甲 +
+    N 格挡」：同一件道具，摆在护甲旁边和摆在角落，收益完全不同。
+    这里返回一个 `Placement -> 相邻目标件数` 的函数，交给 `plan_place(bias=...)`。
+    没有 `db` / 这件道具不带协同 / 背包里根本没有它要加成的目标 -> 返回 None（老行为）。
+    """
+    if db is None or not item_name:
+        return None
+    st = db.get(item_name)
+    if st is None or not (st.helps_armor or st.helps_weapons):
+        return None
+
+    area = (st.synergy_area or "").lower()
+    want_armor = st.helps_armor
+    # 目标格：护甲（有格挡的）或武器（有伤害的）
+    targets: set[tuple[int, int]] = set()
+    for other in bag.in_bag():
+        s = db.get(other.name)
+        if s is None:
+            continue
+        if want_armor and (s.block_per_turn > 0 or s.block > 0):
+            targets |= set(other.cells)
+        elif not want_armor and s.damage > 0:
+            targets |= set(other.cells)
+    if not targets:
+        return None
+
+    if "left" in area:
+        dirs = ((-1, 0),)
+    elif "right" in area:
+        dirs = ((1, 0),)
+    elif "above" in area:
+        dirs = ((0, 1),)
+    elif "below" in area:
+        dirs = ((0, -1),)
+    elif "diagonal" in area:
+        dirs = _ADJ + _DIAG
+    else:
+        dirs = _ADJ
+
+    def bias(p: Any) -> float:
+        n = 0
+        for c in p.cells:
+            for dx, dy in dirs:
+                if (c[0] + dx, c[1] + dy) in targets:
+                    n += 1
+        return float(n)
+
+    return bias
 
 
 @dataclass
@@ -71,7 +128,8 @@ def place_with_room(
             res.reason = "no probe"
             return res
 
-        plan = plan_place(bag, uid, max_moves=max_moves)
+        bias = synergy_bias(bag, name, db)
+        plan = plan_place(bag, uid, max_moves=max_moves, bias=bias)
         res.plan = plan
 
         if plan.impossible:
@@ -153,14 +211,28 @@ def place_with_room(
         res.ack = ack
         res.sent = final
         res.reason = plan.why
+        _syn = 0
+        if bias is not None:
+            # 把「这个落点挨着几件目标」记下来：以后复盘「协同到底有没有生效」只看这一行
+            try:
+                _it = bag.item(uid)
+                _rot = int(final.get("rot_deg") or 0)
+                _foot = _it.rotations[_rot][parse_cell(final.get("cell"))]
+
+                class _P:
+                    cells = _foot
+
+                _syn = int(round(bias(_P())))
+            except Exception:
+                _syn = 0
         if record:
             record({"event": "act", "action": final, "ok": ack.get("ok"),
                     "changed": ack.get("changed"), "ms": ack.get("ms"),
                     "delta": ack.get("delta"), "error": ack.get("error"),
-                    "plan": plan.why})
+                    "plan": plan.why, "synergy_neighbors": _syn})
         say(f"放 {label} @{final.get('cell')} rot{final.get('rot_deg')} -> "
             f"ok={ack.get('ok')} changed={ack.get('changed')} ms={ack.get('ms')}"
-            f"（{plan.why}）")
+            f"（{plan.why}）" + (f"  协同：挨着 {_syn} 件目标" if _syn else ""))
         return res
 
     return res

@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from policy import per_turn_value
 
@@ -217,15 +217,20 @@ def _move_step(uid: str, p: Placement) -> dict[str, Any]:
     return step
 
 
-def _sort_placements(bag: Bag, placements: list[Placement]) -> list[Placement]:
+def _sort_placements(bag: Bag, placements: list[Placement],
+                     bias: Callable[[Placement], float] | None = None) -> list[Placement]:
     """把落点排成「先试更像人摆的」顺序：贴边、紧凑、靠左下，且行为确定。
 
     纯为了可复现：同样的背包 + 同样的表，一定选同一个落点（方便 A/B 和单测）。
+
+    `bias`：**相邻协同**的加权（E27）。`Knight's Armor` 这类「相邻护甲 +N 格挡」的道具，
+    摆在护甲旁边和摆在角落是两件不同的道具；`place.py` 会传一个
+    「这个落点挨着几件护甲」的函数进来，数值越大越优先。
     """
     cells = bag.cells
     occupied = bag.occupied()
 
-    def key(p: Placement) -> tuple[int, int, int, int]:
+    def key(p: Placement) -> tuple[int, int, int, int, int]:
         # 1) 贴边（footprint 的邻格里有多少是背包外或已占 -> 越挤越优先）
         touch = 0
         for c in p.cells:
@@ -233,21 +238,29 @@ def _sort_placements(bag: Bag, placements: list[Placement]) -> list[Placement]:
                 n = (c[0] + dx, c[1] + dy)
                 if n not in cells or n in occupied:
                     touch += 1
-        return (-touch, p.cell[1], p.cell[0], p.rot)
+        syn = 0
+        if bias is not None:
+            try:
+                syn = int(round(bias(p) * 10))
+            except Exception:
+                syn = 0
+        return (-syn, -touch, p.cell[1], p.cell[0], p.rot)
 
     return sorted(placements, key=key)
 
 
-def place_options(bag: Bag, uid: str, exclude: Iterable[str] = ()) -> list[Placement]:
+def place_options(bag: Bag, uid: str, exclude: Iterable[str] = (),
+                  bias: Callable[[Placement], float] | None = None) -> list[Placement]:
     """这件物品现在能放在哪（自身旧格算空，`exclude` 里的物品也当不在）。"""
     it = bag.item(uid)
     if it is None:
         return []
     blocked = bag.occupied(exclude=set(exclude) | {uid})
-    return _sort_placements(bag, it.placements(blocked, bag.cells))
+    return _sort_placements(bag, it.placements(blocked, bag.cells), bias)
 
 
 def plan_place(bag: Bag, uid: str, *, max_moves: int = 1, allow_swap: bool = True,
+               bias: Callable[[Placement], float] | None = None,
                allow_repack: bool = True) -> Plan:
     """把 `uid`（通常是一件地上的战利品）放进背包的计划。
 
@@ -269,7 +282,7 @@ def plan_place(bag: Bag, uid: str, *, max_moves: int = 1, allow_swap: bool = Tru
         return Plan(why=f"{it.name or uid} can never fit ({it.needs} cells)", impossible=True)
 
     # 1) 直接放
-    options = place_options(bag, uid)
+    options = place_options(bag, uid, bias=bias)
     if options:
         return Plan([_place_step(uid, options[0])], why=f"place {it.name or uid} directly")
 
@@ -283,7 +296,7 @@ def plan_place(bag: Bag, uid: str, *, max_moves: int = 1, allow_swap: bool = Tru
                 target = bag.item(uid)
                 hits = [pl for pl in target.placements(new_occ, bag.cells)]
                 if hits:
-                    hits = _sort_placements(bag, hits)
+                    hits = _sort_placements(bag, hits, bias)
                     return Plan([_move_step(other.uid, p), _place_step(uid, hits[0])],
                                 why=f"move {other.name or other.uid} out of the way")
 
@@ -301,7 +314,7 @@ def plan_place(bag: Bag, uid: str, *, max_moves: int = 1, allow_swap: bool = Tru
                 target = bag.item(uid)
                 hits = [pl for pl in target.placements(new_occ, bag.cells)]
                 if hits:
-                    hits = _sort_placements(bag, hits)
+                    hits = _sort_placements(bag, hits, bias)
                     return Plan(sp.steps + [_place_step(uid, hits[0])],
                                 why=f"swap {a.name or a.uid} <-> {b.name or b.uid}")
 
@@ -313,7 +326,7 @@ def plan_place(bag: Bag, uid: str, *, max_moves: int = 1, allow_swap: bool = Tru
             target = bag.item(uid)
             hits = [pl for pl in target.placements(new_occ, bag.cells)]
             if hits:
-                hits = _sort_placements(bag, hits)
+                hits = _sort_placements(bag, hits, bias)
                 return Plan(repack.steps + [_place_step(uid, hits[0])],
                             why="repack the bag")
 
@@ -470,7 +483,8 @@ def plan_repack(bag: Bag) -> Plan | None:
 # ---------- 丢哪一件 ----------
 
 
-def item_value(name: str, ledger: Any, db: Any = None) -> float:
+def item_value(name: str, ledger: Any, db: Any = None, *,
+               armor_pieces: int = 0) -> float:
     """粗估值：账本里测到的「伤害 + 格挡 + 状态效果」，没样本给 1.0。
 
     没测过的物品不当作 0：0 会让它永远第一个被丢，而它可能是这局最好的东西。
@@ -478,6 +492,10 @@ def item_value(name: str, ledger: Any, db: Any = None) -> float:
     `db`（`agent/itemdb.py` 的 ItemDB）给了静态类别信息后，按类别补一点「不该丢」的分：
     续航/遗物最保值，每回合护甲次之，辅助看它给多少。这些是**加分**，不是覆盖账本，
     所以「账本测出来很强」的物品仍然排在前面。
+
+    `armor_pieces`：背包里现在有几件护甲。像 Knight's Armor 这种
+    「相邻的护甲 +N 格挡」的道具，值多少取决于**旁边有没有护甲**——
+    没有护甲时它只是一块 6 甲的板子，旁边站两件甲时它每回合多给 4 甲。
     """
     scored = False
     value = 0.0
@@ -511,6 +529,10 @@ def item_value(name: str, ledger: Any, db: Any = None) -> float:
                 value += 0.0                 # 让账本/静态数值自己说话
             if "curse" in st.tags:
                 value -= 2.0
+            # 相邻协同：护甲流的核心。旁边有几件甲，这件「给甲加甲」的东西就值多少。
+            # 只按最多 4 件折现（再多也摆不下、而且 `min(block, incoming)` 会浪费）。
+            if armor_pieces > 0 and st.helps_armor and st.synergy_block > 0:
+                value += per_turn_value(st.synergy_block * min(armor_pieces, 4))
     if not scored and db is None:
         return 1.0
     return value if value > 0 else 0.5
@@ -529,10 +551,17 @@ def drop_ranking(bag: Bag, ledger: Any, protected: Iterable[str] = (),
     rows: list[tuple[float, ItemFit]] = []
     kept: list[tuple[float, ItemFit]] = []
     attacks: list[tuple[float, ItemFit]] = []
+    # 背包里现在有几件护甲：决定「给相邻护甲加成」的道具值多少（见 item_value）
+    armor_n = 0
+    if db is not None:
+        for it in bag.in_bag():
+            st = db.get(it.name)
+            if st is not None and (st.block_per_turn > 0 or st.block > 0):
+                armor_n += 1
     for it in bag.in_bag():
         if it.uid in skip:
             continue
-        value = item_value(it.name, ledger, db)
+        value = item_value(it.name, ledger, db, armor_pieces=armor_n)
         if it.uid and it.name and it.name.strip().upper().endswith("AMULET"):
             value += 3.0           # 饰品多为被动，没见过也先留着
         row = (value, it)

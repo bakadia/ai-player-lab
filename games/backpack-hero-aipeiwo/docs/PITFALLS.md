@@ -676,6 +676,36 @@ prefab 上的 `-999` 是哨兵（见 E20），`abs(-999)` → **+999**，乘 0.3
 `itemdb` 里已经有 `SENTINEL` 常量，新加的字段直接复用，别各写各的。
 
 
+## E27 · 物品描述是**运行时**拼的，`ModTextGen` 的四个方法是 static
+
+**现象**：`data/item-catalog.json` 里 833 件道具的 `descriptions[]` 是空的。
+以前只能靠「数值 + 猜测」判断道具干什么用，`for each` / 「相邻的护甲 +N」这类
+**规则型**效果完全看不见——而这正是护甲流的核心（用户 2026-10-30 的提醒）。
+
+**真相**：人话在 `ModTextGen` 里，而且**是静态方法**：
+
+```
+ModTextGen.GenerateCombatEffectDescription  (Item2, Item2.CombattEffect, bool reload) : string
+ModTextGen.GenerateMovementEffectDescription(Item2, Item2.MovementEffect, bool reload) : string
+ModTextGen.GenerateModifierDescription      (Item2, Item2.Modifier, bool reload) : string
+ModTextGen.GenerateAddModifierDescription   (Item2, Item2.AddModifier, bool reload) : string
+```
+
+- 先按实例调（`ModTextGen.main.Generate...`）会报 **CS0176「无法使用实例引用访问
+  静态成员」**；直接 `ModTextGen.Generate...` 即可，**不需要 `main`**。
+- `reload=false` = 只要字符串、不要重建 UI。`true` 会动 UI 状态，别在 dump 里用。
+- 别用 OCR：鼠标悬停还需要窗口在前台、坐标还得对，纯浪费。
+
+**产物**：桥接 v8.25 起 `dump_item_catalog` 每件道具多一个 `description_runtime[]`
+（903 件里 752 件有内容），`itemdb` 再从里面解析出
+`helps_armor / helps_weapons / synergy_area`（见 `docs/RESULT-20261030-synergy.md`）。
+
+**注意**：`ModTextGen` 生成的句子里数值是 `/x` 占位符（运行时按状态替换），
+要数值仍然得看 `modifiers[].effects[].value`。另外有 151 件会返回
+`ERROR: DESCRIPTION FOR MODIFIER COULD NOT BE GENERATED`，这种要当「没有描述」处理。
+
+
+
 
 
 
