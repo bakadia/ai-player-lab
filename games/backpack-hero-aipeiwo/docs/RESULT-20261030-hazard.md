@@ -96,32 +96,68 @@ ui.special_reorg = {
 **但这局仍然在付钱**：`place_item` 全返回 `no fitting cell (freeGridSquares=0)`。
 也就是说「先塞」这个动作现在是**尽力而为**：有空格就省下血，没空格照付。
 
-## 4. 结论（诚实版）
+## 4. 实验①：「塞」vs「不塞」的经济性 —— 结论是**塞不可用**
+
+用 `--hazard-policy {place,skip,alternate}` + `tools/ab_hazard.py` 跑了 6 局
+（`data/runs/ab-hazard*`），共 11 条特殊整理事件：
+
+| 类别 | 条数 | 情况 |
+|---|---|---|
+| 背包满（`free=0`），塞不了 | **7** | `place_item` 报 `no fitting cell (freeGridSquares=0)`，只能付钱 |
+| 有空位（`free=3`），塞成功 | 4 | `ok=True changed=True`，`hazards_outside` 归零、`damage` 归零 |
+| 塞成功的后续 | **4/4 卡死** | `inventory_phase=3` + `in_special_reorg=false`，`finish` 与 `skip` 都 no-op、`seq` 冻结 |
+
+卡死现场（`data/runs/ab-hazard2/run2.console.txt`，塞完 `STICKY HONEY` 之后）：
+
+```
+[step 72] mode=reorganize hp=27 in_grid=4 loose=0
+  （phase=3 但 in_special_reorg=false：finish 一定 no-op，改发 skip_reorganize（E9））
+  -> skip_reorganize
+     ok=False changed=False ms=20083 error=timeout ... (inventoryPhase still reorganize)
+  ... 连发 4 次，seq 一直是 4125，判定卡死
+```
+
+**所以「塞」现在不是可用选项**：省下 2-4 点血，代价是整局报废（比付血差得多）。
+默认值因此改成 **`--hazard-policy skip`**（付钱、道具被销毁，继续跑）。
+`place` / `alternate` 保留为实验开关，打开时会打印一行警告。
+
+> 机制上「塞」确实有效（`damage` → 0 是真的），坏在**塞完这个整理阶段不会自己结束**。
+> 推测是 `AddToGrid` 绕过了游戏自己的特殊整理完成流程（正常是拖拽 → `EndDrag` →
+> 游戏把 `inSpecialReorg` 置 false 并推进 phase）。这条没验证，属于下一轮的活。
+
+### 顺带修掉的一个真 bug（E9 变体）
+
+原来的兜底只在 `in_special_reorg == true` 时才发 `skip_reorganize`；可塞完 hazard 之后
+状态是 `in_special_reorg == false` 而 phase 仍是 3 —— 兜底根本不触发，白白 4×20s 超时。
+现在 `phase=3 && !in_special_reorg` 时直接发 `skip_reorganize`（虽然这个死状态它也是 no-op，
+但至少不会在别的场合白等 80 秒）。
+
+## 5. 结论（诚实版）
 
 1. **机制结案**：整理阶段掉血的来源、公式、累积规则、可见性缺口全部确认，且有真机对账。
    这是 M4 那 29 点「非战斗掉血」的 100% 解释。
-2. **能力上限**：能不能免伤完全取决于**那一刻主网格有没有空格**。有空格 = 免费；
-   没空格 = 只能付 `2..19`，而且第 N 次更贵。
-3. **没有实现的（别当成已解决）**：
-   - 「网格满时要不要丢一件去换」——没做，现在的默认是**不丢**（`allow_drops=False`），
-     因为丢主武器去躲 2-3 点血是净亏；但 `damage=19` 时这个判断可能是反的，需要数据。
-   - 「塞进去留着诅咒值不值」——`STICKY HONEY` / `GOO` 都是 `item_type [52]` 的诅咒类
-     （1 格、`onUse→Destroy`、`onTurnEnd→ItemStatusEffect(locked)`），
-     塞进去是**把诅咒带在身上**，理论上可能比付 2 点血更亏。这条完全没有验证。
-4. **真正值钱的推论**：既然代价由「网格外件数 × 累积计数器」决定，
-   那**「让背包别在事件前塞满」**比「会塞回去」更重要——这和 M4 里
-   「非战斗掉血 11.3/局」的量级是一致的。
+2. **代价是硬的**：能不能免伤只看**那一刻主网格有没有空格**。有空格才谈得上塞，
+   没空格就只能付 `2..19`，而且第 N 次更贵。
+3. **「塞」这条路现在是堵的**（实验①的结论）：塞成功 4/4 会把游戏卡进
+   `phase=3 / in_special_reorg=false` 的死状态，整局报废。所以默认付钱。
+   **「省血」和「能继续跑」目前二选一，而后者更重要。**
+4. **真正值钱的推论没变**：代价由「网格外件数 × 累积计数器」决定，
+   所以**「别在事件前把背包塞满」**仍然是最大的杠杆——这和 M4 里
+   「非战斗掉血 11.3/局」的量级一致，也是唯一还没试过的方向。
 
-## 5. 下一轮建议（按性价比）
+## 6. 下一轮建议（按性价比）
 
-1. **先测「塞 vs 不塞」的经济性**：`damage` 已知，诅咒道具的代价未知。
-   最小实验：同一局里遇到 `GOO` 时交替「塞 / 不塞」，看后续 3 场战斗的掉血与可用格子。
+1. **先修「塞完卡死」**，否则①这条路白修：正常流程是拖拽 → `EndDrag` →
+   `GameManager.MoveItemTowardsGrid`（private）→ 游戏自己收尾。我们走的是
+   `AddToGrid`，很可能跳过了收尾。`Actions.cs` 里 `place_item` 已经有 `via=drag`
+   分支，值得拿特殊整理的道具试一次 `via=drag`，看 phase 会不会正常推进。
 2. **网格满时的决策**：`damage >= 6` 才考虑丢一件最低价值的非武器；
    现在有 `damage` 这个数了，这条规则可以写成纯函数并单测。
-3. **让背包别塞满**：战利品配额 3 件 + `--make-room 2` 的组合会把 9 格塞爆；
-   可以考虑「留 1 格余量」的摆放策略（`place.py` 里已经有 `free_squares` 的概念）。
+3. **让背包留 1 格余量**：战利品配额 3 件 + `--make-room 2` 会把 9 格塞爆
+   （实测 11 条事件里 7 条 `free=0`）。`place.py` 里已经有 `free_squares`，
+   加一条「保留 1 格」的摆放约束即可，而且**这条不依赖①**，现在就能做。
 
-## 6. 复现
+## 7. 复现
 
 ```powershell
 # 看某个时刻的特殊整理（不驱动游戏，只读 state.json）

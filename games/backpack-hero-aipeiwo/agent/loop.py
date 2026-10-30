@@ -231,6 +231,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--probe-hazard", action="store_true",
                     help="**调试钩子**：遇到特殊整理时，绕开 planner 直接对 hazard 道具发一次 "
                          "place_item，把 ack 记进日志——用来确认这个阶段到底让不让放（E25）。")
+    ap.add_argument("--hazard-policy", default="skip",
+                    choices=["auto", "place", "skip", "alternate"],
+                    help="特殊整理里网格外的 hazard 道具要不要塞回网格（E25）。"
+                         "**默认 skip = 付钱**：2026-10-30 实测「塞成功」之后游戏会卡在"
+                         "inventory_phase=3 / in_special_reorg=false，finish 与 skip 都 no-op、"
+                         "seq 冻结（2/2 局），整局报废——比付 2-4 点血更差。"
+                         "place/auto = 仍然去试（只在不丢东西的前提下），alternate = 奇数次塞。")
     args = ap.parse_args(argv)
 
     flags = set_flags(Flags(
@@ -267,6 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     hazard_tried: set[str] = set()     # 本次「特殊整理」里已经试过塞回网格的 hazard uid（E25）
     special_seen = 0                   # 遇到过几次特殊整理（--stop-at-special 用）
     special_prev_active = False        # 上一帧是否在特殊整理里（用来数「第几次」）
+    hazard_warned = False              # --hazard-policy 允许塞时的警告只打一次
     start_fails: dict[str, int] = {}   # start_event 空操作次数（2 次就拉黑事件）
     close_map_tries = 0                # 同一次「地图开着」里试过几次 close_map
     arrivals: dict[str, int] = {}      # 每个房间到过几次（用来终结「两房间来回走」）
@@ -435,6 +443,26 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"没有可做的动作：{why}")
                     break
 
+                # ---- E9 的死状态：phase=3 但 in_special_reorg=false ----
+                # `FinishReorganizeButton()` 第一条就是 `if (!inSpecialReorg) return;`，
+                # 所以这个状态下点多少次都不会有变化（真机上每次还要等 20s 超时）。
+                # 以前这条路只在「连续 no-op 之后」才兜底，而且只在 in_special_reorg=true
+                # 时发 skip；现在把 hazard 塞回网格后，游戏自己会把 inSpecialReorg 置 false
+                # 而 phase 仍是 3 —— 直接发 `skip_reorganize` 才能出这个阶段。
+                _ui0 = st.get("ui") or {}
+                if (action.get("type") in ("finish_reorganize", "skip_reorganize")
+                        and _ui0.get("inventory_phase") == 3
+                        and not _ui0.get("in_special_reorg")
+                        and not _ui0.get("limited_item_reorganize")
+                        and action.get("type") == "finish_reorganize"):
+                    print("     （phase=3 但 in_special_reorg=false：finish 一定 no-op，"
+                          "改发 skip_reorganize（E9））")
+                    record({"event": "reorg_skip_e9", "seq": st.get("seq"),
+                            "inventory_phase": _ui0.get("inventory_phase"),
+                            "in_special_reorg": _ui0.get("in_special_reorg")})
+                    action = {"type": "skip_reorganize"}
+                    why = "E9: phase=3 且 in_special_reorg=false，finish 无效"
+
                 # ---- E25：特殊整理的 hazard 道具（扣血的真正来源）----
                 # `FinishReorganizeButton()` 会调 `GetDamageForHazards`：
                 #   网格外、`itemType` 含 Hazard(52) 的道具，第 k 个扣 (k + floor + cursesSkipped)，
@@ -478,13 +506,40 @@ def main(argv: list[str] | None = None) -> int:
                         break
                 special_prev_active = _sr_active
                 if _hz is not None and action.get("type") == "finish_reorganize":
-                    print(f"     （特殊整理：先把 {_hz.get('name')} 塞回网格，"
-                          f"否则结束整理扣 {_hz.get('_damage')} 血）")
-                    record({"event": "hazard_place", "seq": st.get("seq"),
-                            "uid": _hz.get("uid"), "name": _hz.get("name"),
-                            "damage_avoided": _hz.get("_damage")})
-                    why = f"special_reorg hazard（躲开 {_hz.get('_damage')} 点血）"
-                    action = _hz
+                    # ① 经济性实验：「塞」vs「不塞」由 --hazard-policy 决定。
+                    # 每次特殊整理记一条 hazard_event（含 damage / free / 选了哪边），
+                    # 事后用 tools/ab_hazard.py 按「后面 3 场掉血」来比。
+                    _want_place = (args.hazard_policy in ("place", "auto")
+                                   or (args.hazard_policy == "alternate"
+                                       and (special_seen % 2) == 1))
+                    if _want_place and not hazard_warned:
+                        hazard_warned = True
+                        print("     !! --hazard-policy 允许塞 hazard：实测塞成功后游戏会卡在"
+                              "phase=3 / in_special_reorg=false（E25），整局可能报废")
+                    if not _want_place:
+                        print(f"     （特殊整理：按 --hazard-policy={args.hazard_policy} 不塞，"
+                              f"付 {_hz.get('_damage')} 血）")
+                        record({"event": "hazard_event", "seq": st.get("seq"),
+                                "n": special_seen, "choice": "skip",
+                                "uid": _hz.get("uid"), "name": _hz.get("name"),
+                                "damage": _hz.get("_damage"),
+                                "hazards_outside": _sr_now.get("hazards_outside"),
+                                "curses_skipped": _sr_now.get("curses_skipped"),
+                                "free_squares": (st.get("backpack") or {}).get("free_squares"),
+                                "hp": (st.get("player") or {}).get("hp")})
+                    else:
+                        print(f"     （特殊整理：先把 {_hz.get('name')} 塞回网格，"
+                              f"否则结束整理扣 {_hz.get('_damage')} 血）")
+                        record({"event": "hazard_event", "seq": st.get("seq"),
+                                "n": special_seen, "choice": "place",
+                                "uid": _hz.get("uid"), "name": _hz.get("name"),
+                                "damage": _hz.get("_damage"),
+                                "hazards_outside": _sr_now.get("hazards_outside"),
+                                "curses_skipped": _sr_now.get("curses_skipped"),
+                                "free_squares": (st.get("backpack") or {}).get("free_squares"),
+                                "hp": (st.get("player") or {}).get("hp")})
+                        why = f"special_reorg hazard（躲开 {_hz.get('_damage')} 点血）"
+                        action = _hz
 
                 print(f"  -> {action.get('type')} {action.get('uid', '')}  ({why})")
                 record({"event": "decide", "seq": st.get("seq"), "action": action, "why": why})
@@ -626,16 +681,18 @@ def main(argv: list[str] | None = None) -> int:
                         ui_now = st.get("ui") or {}
                         print(f"     整理收尾没生效（第 {reorg_fails} 次，"
                               f"in_special_reorg={ui_now.get('in_special_reorg')}）")
-                        if ui_now.get("in_special_reorg"):
-                            # 特殊整理（污染/诅咒）：游戏要你把 reorgnizeItem 拖进包，
-                            # 拖不动时 FinishReorganizeButton 永远 no-op。跳过按钮
-                            # （SkipReorganizeButton）实测能直接退出这个阶段，代价是
-                            # 那件特殊道具留在原地——比整局卡死好。
+                        if not ack.get("changed"):
+                            # 特殊整理（污染/诅咒 / hazard 塞完）时会落到这里：
+                            # `FinishReorganizeButton` 在 `!inSpecialReorg` 时第一行 return，
+                            # 所以 **in_special_reorg 为真或为假都可能 no-op**，一律试 skip。
+                            # `SkipReorganizeButton` 实测能直接退出这个阶段，代价是留在原地的
+                            # 道具被销毁——比整局卡死好（E9 / E25）。
                             ack3 = bridge.act({"type": "skip_reorganize"}, timeout_ms=15000)
                             record({"event": "reorg_skip", "fails": reorg_fails,
                                     "ok": ack3.get("ok"), "changed": ack3.get("changed"),
+                                    "in_special_reorg": ui_now.get("in_special_reorg"),
                                     "error": ack3.get("error")})
-                            print(f"     特殊整理：改发 skip_reorganize -> "
+                            print(f"     整理收尾 no-op：改发 skip_reorganize -> "
                                   f"ok={ack3.get('ok')} changed={ack3.get('changed')}")
                             if ack3.get("changed"):
                                 reorg_fails = 0

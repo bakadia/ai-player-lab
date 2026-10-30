@@ -638,6 +638,13 @@ damage, items[{uid,name,hazard}]}`，`damage` 是按上面公式**自己算的**
   之后 `hazards_outside` 直接归零）。所以别用 planner 的「主网格没空位」提前判死，
   直接发 `place_item` 让游戏自己回答（`loop.py` 的 `_hazard` 分支就是这么做的）。
 - 网格满时**只能付钱**：不要为了躲 2-5 点血去丢主武器。`loop` 走 `allow_drops=False`。
+- **但「塞成功」会把游戏卡死（2026-10-30 实测 4/4）**：塞进去之后
+  `inventory_phase` 还是 3、`in_special_reorg` 已经变 false，
+  `finish_reorganize` 与 `skip_reorganize` 双双 no-op、`state.seq` 冻结，
+  整局只能弃。所以 `loop.py` 的默认值现在是 **`--hazard-policy skip`（付钱）**，
+  `place` 只作实验开关。推测原因是 `AddToGrid` 绕过了游戏自己的收尾
+  （正常是拖拽 → `EndDrag` → `MoveItemTowardsGrid`），
+  `place_item` 的 `via=drag` 分支可能才是正解——**没验证**。
 - 这些道具多半是诅咒类（`STICKY HONEY`：`item_type [52]`、1 格、`onUse→Destroy`、
   `onTurnEnd→ItemStatusEffect(locked)`；`GOO` 同族），**塞进去是留着诅咒、留外面是扣血**，
   所以「值不值得塞」要按 `damage` 和道具价值比，不能一律塞。
