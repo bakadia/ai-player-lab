@@ -577,6 +577,39 @@ def test_drop_keeps_sustain():
     print("PASS drop keeps sustain")
 
 
+def test_hazard_place_before_finish():
+    """E25：特殊整理里网格外的 Hazard 道具要先塞回网格（否则每次扣 2/3/4/5 血）。
+
+    `ItemType.Hazard == 52`；伤害 = Σ(k + floor + cursesSkipped)。
+    """
+    from loop import hazard_place_action
+
+    tried: set = set()
+    st = {"ui": {"special_reorg": {
+        "active": True, "hazards_outside": 1, "damage": 3, "curses_skipped": 1,
+        "items_outside": 2,
+        "items": [{"uid": "i-1", "name": "MEAL", "hazard": False},
+                  {"uid": "i-2", "name": "TOXIC WASTE", "hazard": True}]}}}
+
+    act = hazard_place_action(st, tried)
+    assert act and act["type"] == "place_item" and act["uid"] == "i-2", act
+    assert act["_hazard"] is True and act["_damage"] == 3, act
+
+    # 同一个 uid 只试一次：塞不进去就付钱，别死循环
+    assert hazard_place_action(st, tried) is None
+
+    # 没有 hazard 在外（都塞进去了）-> 正常结束整理
+    st2 = {"ui": {"special_reorg": {"active": True, "hazards_outside": 0, "damage": 0,
+                                    "items": [{"uid": "i-2", "hazard": True}]}}}
+    assert hazard_place_action(st2, tried) is None
+
+    # 离开特殊整理 -> 记住的 uid 清空（下一轮新的特殊整理还能再试）
+    hazard_place_action({"ui": {"special_reorg": {"active": False}}}, tried)
+    assert not tried, tried
+    assert hazard_place_action(st, tried) is not None
+    print("PASS hazard place before finish")
+
+
 def test_bomb_priority():
     """炸弹怪：攻击力为 0 也要优先打掉（自爆 26 血）。"""
     from itemdb import ItemDB
@@ -632,6 +665,7 @@ if __name__ == "__main__":
     test_sustain_scoring()
     test_reward_pick()
     test_drop_keeps_sustain()
+    test_hazard_place_before_finish()
     test_bomb_priority()
 
     # 背包 planner 的自测也一起跑（纯函数，不需要游戏）

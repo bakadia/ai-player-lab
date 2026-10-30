@@ -143,6 +143,38 @@ def _event_rooms(state: dict[str, Any], blocked: set[str] | None = None) -> list
     return out
 
 
+def hazard_place_action(state: dict[str, Any], tried: set[str]) -> dict[str, Any] | None:
+    """E25：特殊整理里「网格外的 Hazard 道具」→ 先塞回网格，再结束整理。
+
+    游戏侧的规则（`GameManager.GetDamageForHazards` 的 IL，v8.23 核对）：
+
+        damage = Σ_{k=1..n} (k + floor + cursesSkipped)   # n = 网格外且 itemType 含 Hazard(52) 的件数
+        cursesSkipped += n                                 # 结束整理时累加，所以第二次会比第一次贵
+
+    也就是说：**只要把这些道具放进网格（`itemMovement.inGrid = true`），它们就不再计入伤害**，
+    而直接点「结束整理」是「扣血 + 道具被销毁」两亏。以前 `loop` 只会点结束，等于每局白送
+    14-15 点血（M4 实测：A 组 11.3 血/局全部来自这里）。
+
+    返回一条 `place_item` 动作；没什么可做就返回 None。同一个 uid 只试一次
+    （塞不进去就别死循环，老老实实付钱），`tried` 在离开特殊整理时清空。
+    """
+    sr = (state.get("ui") or {}).get("special_reorg") or {}
+    if not sr.get("active"):
+        tried.clear()
+        return None
+    if (sr.get("hazards_outside") or 0) <= 0:
+        return None
+    for it in sr.get("items") or []:
+        uid = it.get("uid")
+        if not it.get("hazard") or not uid or uid in tried:
+            continue
+        tried.add(uid)
+        return {"type": "place_item", "uid": uid,
+                "name": it.get("name") or "",
+                "_hazard": True, "_damage": sr.get("damage")}
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="run a whole dungeon floor loop")
     ap.add_argument("--runtime", help="runtime 目录")
@@ -193,6 +225,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="背包放不下战利品时，最多丢 N 件最低价值的背包物品来腾位。"
                          "0 = 不丢（老行为：放不下就放弃）。判断价值用账本均值，"
                          "没测过的物品不当作 0 分（不会第一个被丢）")
+    ap.add_argument("--stop-at-special", type=int, default=0, metavar="N",
+                    help="**调试钩子**：遇到第 N 次「特殊整理」（in_special_reorg）就停下，"
+                         "把游戏留在那个阶段，方便手工/脚本验证 hazard 放置（E25）。0 = 不停。")
+    ap.add_argument("--probe-hazard", action="store_true",
+                    help="**调试钩子**：遇到特殊整理时，绕开 planner 直接对 hazard 道具发一次 "
+                         "place_item，把 ack 记进日志——用来确认这个阶段到底让不让放（E25）。")
     args = ap.parse_args(argv)
 
     flags = set_flags(Flags(
@@ -226,6 +264,9 @@ def main(argv: list[str] | None = None) -> int:
     bad_edges: set[tuple[str, str]] = set()   # 房间图上「看着通、实测走不通」的边
     move_from = ""                     # 上一次 move_to_room 是从哪个房间出发的
     place_skips: dict[str, int] = {}   # place_item 失败后换候选格的重试计数
+    hazard_tried: set[str] = set()     # 本次「特殊整理」里已经试过塞回网格的 hazard uid（E25）
+    special_seen = 0                   # 遇到过几次特殊整理（--stop-at-special 用）
+    special_prev_active = False        # 上一帧是否在特殊整理里（用来数「第几次」）
     start_fails: dict[str, int] = {}   # start_event 空操作次数（2 次就拉黑事件）
     close_map_tries = 0                # 同一次「地图开着」里试过几次 close_map
     arrivals: dict[str, int] = {}      # 每个房间到过几次（用来终结「两房间来回走」）
@@ -256,8 +297,12 @@ def main(argv: list[str] | None = None) -> int:
     loot_mode = False       # 正在「战后战利品限时挑选」里
     loot_taken = 0          # 本段战利品已经拿了几件（配额由游戏给）
 
-    def try_place(base: dict[str, Any]) -> dict[str, Any] | None:
-        """尽力放一件战利品。返回最后一次 ack；None = 这件不放了。"""
+    def try_place(base: dict[str, Any], allow_drops: bool = True) -> dict[str, Any] | None:
+        """尽力放一件战利品。返回最后一次 ack；None = 这件不放了。
+
+        `allow_drops=False`：不放「为它丢别的东西」这条路（E25 的 hazard 道具用）——
+        塞得进去就白赚，塞不进去就按游戏规则付那 2-5 点血，不值得拿主武器去换。
+        """
         nonlocal drops_left
         res = place_with_room(
             bridge, base.get("uid", ""),
@@ -266,11 +311,12 @@ def main(argv: list[str] | None = None) -> int:
             db=itemdb,
             # 战利品环节允许丢，但**整段最多丢一件**：真机为了塞 2-3 格的法杖
             # 来回丢 DUELING SWORD / DARK WAND，拿了又丢净亏。丢谁仍由价值表决定。
-            drops_left=drops_left,
+            drops_left=drops_left if allow_drops else 0,
             log=lambda s: print(f"     {s}"),
             record=record,
         )
-        drops_left = res.drops_left
+        if allow_drops:
+            drops_left = res.drops_left
         if res.reason == "no probe":
             # 探针不可用（老桥接 / 形状算不出来）：退回原来的「直接发一次」。
             return bridge.act(base, timeout_ms=20000)
@@ -389,6 +435,57 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"没有可做的动作：{why}")
                     break
 
+                # ---- E25：特殊整理的 hazard 道具（扣血的真正来源）----
+                # `FinishReorganizeButton()` 会调 `GetDamageForHazards`：
+                #   网格外、`itemType` 含 Hazard(52) 的道具，第 k 个扣 (k + floor + cursesSkipped)，
+                #   结束后 `cursesSkipped += 数量` —— 同一局第二次是 3、第三次 4、……越拖越贵，
+                #   而且道具会被销毁。以前的做法是直接点「结束整理」，等于每局白送 14-15 血。
+                # 这些道具不在 `backpack.items` 里（那只列网格内的），只能看 `ui.special_reorg`。
+                _hz = hazard_place_action(st, hazard_tried)
+                _sr_now = (st.get("ui") or {}).get("special_reorg") or {}
+                _sr_active = bool(_sr_now.get("active"))
+                if _sr_active and not special_prev_active:
+                    special_seen += 1
+                    if args.probe_hazard:
+                        # 只探一次：直接发 place_item，看游戏在「特殊整理进行中」让不让放。
+                        _probe = [it for it in (_sr_now.get("items") or []) if it.get("hazard")]
+                        if _probe:
+                            _pu = _probe[0]["uid"]
+                            _pa = bridge.act({"type": "place_item", "uid": _pu}, timeout_ms=20000)
+                            _after = bridge.state()
+                            _sr2 = (_after.get("ui") or {}).get("special_reorg") or {}
+                            print(f"     !! probe-hazard: place {_pu} ok={_pa.get('ok')} "
+                                  f"changed={_pa.get('changed')} err={_pa.get('error')}")
+                            print(f"     !! probe-hazard: after -> free="
+                                  f"{(_after.get('backpack') or {}).get('free_squares')} "
+                                  f"hazards_outside={_sr2.get('hazards_outside')} "
+                                  f"damage={_sr2.get('damage')}")
+                            record({"event": "hazard_probe", "seq": _after.get("seq"),
+                                    "uid": _pu, "ok": _pa.get("ok"),
+                                    "changed": _pa.get("changed"), "error": _pa.get("error"),
+                                    "delta": _pa.get("delta"),
+                                    "free_after": (_after.get("backpack") or {}).get("free_squares"),
+                                    "hazards_outside_after": _sr2.get("hazards_outside"),
+                                    "damage_after": _sr2.get("damage")})
+                    if args.stop_at_special and special_seen >= args.stop_at_special:
+                        print(f"     !! --stop-at-special：停在第 {special_seen} 次特殊整理"
+                              f"（damage={_sr_now.get('damage')} "
+                              f"free={(st.get('backpack') or {}).get('free_squares')}）")
+                        record({"event": "special_stop", "seq": st.get("seq"),
+                                "n": special_seen, "special_reorg": _sr_now,
+                                "free_squares": (st.get("backpack") or {}).get("free_squares"),
+                                "items": (st.get("backpack") or {}).get("items")})
+                        break
+                special_prev_active = _sr_active
+                if _hz is not None and action.get("type") == "finish_reorganize":
+                    print(f"     （特殊整理：先把 {_hz.get('name')} 塞回网格，"
+                          f"否则结束整理扣 {_hz.get('_damage')} 血）")
+                    record({"event": "hazard_place", "seq": st.get("seq"),
+                            "uid": _hz.get("uid"), "name": _hz.get("name"),
+                            "damage_avoided": _hz.get("_damage")})
+                    why = f"special_reorg hazard（躲开 {_hz.get('_damage')} 点血）"
+                    action = _hz
+
                 print(f"  -> {action.get('type')} {action.get('uid', '')}  ({why})")
                 record({"event": "decide", "seq": st.get("seq"), "action": action, "why": why})
 
@@ -417,18 +514,31 @@ def main(argv: list[str] | None = None) -> int:
                             break
 
                 if action.get("type") == "place_item":
-                    # 走 planner：4 朝向搜落点 + 需要时挪/换/丢（--make-room）
-                    _sk = place_skips.get(action.get("uid", ""), 0)
-                    if _sk:
-                        action = dict(action)
-                        action["skip"] = _sk
-                    ack = try_place(action)
-                    if ack is None:
-                        explored.add(f"place:{action.get('uid', '')}")
-                        steps += 1
-                        continue
-                    if loot_mode and ack.get("changed"):
-                        loot_taken += 1
+                    if action.get("_hazard"):
+                        # E25：特殊整理的道具是放到**游戏给的特殊区域**里的，不走主背包。
+                        # 所以别用 planner 的「主网格有没有空位」去拦它——实测 free=0
+                        # 时游戏照样接受（place_item ok=True），放进去后 hazards_outside 立刻归零。
+                        _act = {"type": "place_item", "uid": action.get("uid")}
+                        ack = bridge.act(_act, timeout_ms=20000)
+                        record({"event": "act", "action": _act, "ok": ack.get("ok"),
+                                "changed": ack.get("changed"), "ms": ack.get("ms"),
+                                "delta": ack.get("delta"), "error": ack.get("error"),
+                                "hazard": True})
+                        print(f"     ok={ack.get('ok')} changed={ack.get('changed')} "
+                              f"err={ack.get('error')}")
+                    else:
+                        # 走 planner：4 朝向搜落点 + 需要时挪/换/丢（--make-room）
+                        _sk = place_skips.get(action.get("uid", ""), 0)
+                        if _sk:
+                            action = dict(action)
+                            action["skip"] = _sk
+                        ack = try_place(action, allow_drops=not action.get("_hazard"))
+                        if ack is None:
+                            explored.add(f"place:{action.get('uid', '')}")
+                            steps += 1
+                            continue
+                        if loot_mode and ack.get("changed"):
+                            loot_taken += 1
                 else:
                     ack = bridge.act(action, timeout_ms=20000)
                 delta = ack.get("delta") or {}

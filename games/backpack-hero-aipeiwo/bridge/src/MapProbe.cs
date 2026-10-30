@@ -1025,6 +1025,59 @@ namespace BphBridge
             bool skippableReorg = false;
             try { skippableReorg = gm.skippableReorganization; } catch { }
             w.Prop("skippable_reorganization", skippableReorg);
+
+            // 特殊整理（EnterSpecialOrganization）的 hazard 明细（PITFALLS E25）。
+            //
+            // 结束整理时 `GameManager.FinishReorganizeButton()` 会调
+            // `GetDamageForHazards(out outside, out hazards, out damage)`，IL 读出来是：
+            //   候选 = itemsForSpecialReorganization 里 **itemMovement.inGrid == false** 的；
+            //   只对 itemType 含 Hazard(52) 的逐个累加：damage += (k + floor + cursesSkipped)；
+            //   收尾 `cursesSkipped += 数量` —— 所以第二、三次会越扣越多。
+            // 这些道具不在 backpack.items 里（那只列 inGrid 的），agent 根本看不见，
+            // 于是每次都是「直接付钱 + 道具被销毁」。这里单独给一份，loop 才能先把它们
+            // 塞回网格再结束整理。
+            try
+            {
+                int cs = 0;
+                int fl = 0;
+                try { cs = gm.cursesSkipped; } catch { }
+                try { fl = gm.floor; } catch { }
+
+                List<Item2> outside = SpecialItemsOutside(gm);
+                int hazardN = 0;
+                int hazardDmg = 0;
+                for (int i = 0; i < outside.Count; i++)
+                {
+                    if (!HasHazardType(outside[i])) continue;
+                    hazardN++;
+                    hazardDmg += hazardN + fl + cs;
+                }
+
+                w.Name("special_reorg").BeginObject();
+                w.Prop("active", inSpecialReorg);
+                w.Prop("skippable", skippableReorg);
+                w.Prop("curses_skipped", cs);
+                w.Prop("items_outside", outside.Count);
+                w.Prop("hazards_outside", hazardN);
+                w.Prop("damage", hazardDmg);
+                w.Name("items").BeginArray();
+                for (int i = 0; i < outside.Count && i < 12; i++)
+                {
+                    Item2 oi = outside[i];
+                    string onm = "";
+                    int oid = 0;
+                    try { onm = oi.displayName; } catch { }
+                    try { oid = oi.GetInstanceID(); } catch { }
+                    w.BeginObject();
+                    w.Prop("uid", "i" + oid);
+                    w.Prop("name", onm);
+                    w.Prop("hazard", HasHazardType(oi));
+                    w.EndObject();
+                }
+                w.EndArray();
+                w.EndObject();
+            }
+            catch { }
             w.Prop("player_level", level);
             w.Prop("player_experience", exp);
             w.Prop("popups", World.CountPopups());
@@ -1074,6 +1127,51 @@ namespace BphBridge
         }
 
         // ---------- 写出小工具 ----------
+
+        /// <summary>
+        /// 特殊整理里「还在网格外」的道具 = `GetDamageForHazards` 的候选集。
+        /// 只读：只看 itemMovement.inGrid，不动 transform、不调 AddToGrid。
+        /// </summary>
+        private static List<Item2> SpecialItemsOutside(GameManager gm)
+        {
+            List<Item2> res = new List<Item2>();
+            if (gm == null) return res;
+            try
+            {
+                List<GameObject> src = gm.itemsForSpecialReorganization;
+                if (src == null) return res;
+                for (int i = 0; i < src.Count; i++)
+                {
+                    GameObject go = src[i];
+                    if (go == null) continue;
+                    Item2 it = null;
+                    try { it = go.GetComponent<Item2>(); } catch { }
+                    if (it == null) continue;
+                    bool inGrid = false;
+                    try { inGrid = it.itemMovement != null && it.itemMovement.inGrid; } catch { }
+                    if (!inGrid) res.Add(it);
+                }
+            }
+            catch { }
+            return res;
+        }
+
+        /// <summary>`Item2/ItemType.Hazard == 52`（`data/enums.json` 实测）。只有它计伤害。</summary>
+        private static bool HasHazardType(Item2 it)
+        {
+            if (it == null) return false;
+            try
+            {
+                List<Item2.ItemType> types = it.itemType;
+                if (types == null) return false;
+                for (int i = 0; i < types.Count; i++)
+                {
+                    if ((int)types[i] == 52) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
 
         /// <summary>写 "uid" 一类的引用：null 或 "r123" / "d456"。</summary>
         private static void WriteRef(JsonWriter w, string name, string prefix, UnityEngine.Object obj)

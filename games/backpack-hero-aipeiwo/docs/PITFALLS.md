@@ -601,6 +601,51 @@ FinishLimitedItemSelection()    → 清 limitedItemReorganize / 配额 / 剩下�
   真机为了塞一根 2 格法杖连丢两件，净亏。
 
 
+## E25 · 「整理阶段掉血」= 特殊整理里网格外的 Hazard 道具，公式是 `k + floor + cursesSkipped`
+
+**怎么量出来的**：M4 的 6 局里有 29 血是「非战斗掉血」，全部发生在 `finish_reorganize`
+那一下，而且同一局里越扣越多：`-2, -3, -4, -5`。翻 `GameManager` 的 IL 对上了：
+
+```
+UpdateFinishButton()   -> if (!inSpecialReorg) return;   // 只有特殊整理才显示这个
+                          GetDamageForHazards(...)        // 只为了刷新按钮文案
+FinishReorganizeButton() -> GetDamageForHazards(out outside, out hazards, out damage);
+                            cursesSkipped += hazards;                  // 累加！
+                            if (damage > 0) player.stats.ChangeHealth(-damage, null, false);
+
+GetDamageForHazards():     候选 = itemsForSpecialReorganization 里
+                                   itemMovement != null && !itemMovement.inGrid 的；
+                           只对 itemType.Contains(Hazard=52) 的逐个：
+                               hazards += 1;
+                               damage  += hazards + gm.floor + gm.cursesSkipped;
+```
+
+所以第 k 件 hazard 扣 `k + floor + cursesSkipped`，**而且 `cursesSkipped` 每次结束整理都会
+加一次**——同一局第 2、3 次整理分别是 3、4、5，越拖越贵。实测 1 件（floor 1、cs 0）就是
+`2, 3, 4, 5`，和日志逐条对上；2 件、floor 1、cs 0 = `2+3 = 5`，也在真机上验证过（两件 `GOO`）。
+
+**这些道具在 state 里看不见**：`backpack.items` 只列 `Item2.allItems` 里**在网格内**的
+（`StateReader.cs` 的 `inGrid` 循环），网格外的那几件根本不在列表里。桥接 v8.24 起单独给
+`ui.special_reorg`：`{active, skippable, curses_skipped, items_outside, hazards_outside,
+damage, items[{uid,name,hazard}]}`，`damage` 是按上面公式**自己算的**（不调私有方法）。
+
+**以后怎么办**：
+
+- 结束整理前先看 `ui.special_reorg.damage > 0`：能塞回网格就先塞（`place_item` 用
+  `items[].uid`），塞一件 `hazards_outside` 就少一件，`damage` 立刻下降。
+- **塞得进去 ≠ 需要主网格有空位**：真机上 `free_squares == 0` 时 `place_item` 会报
+  `no fitting cell (freeGridSquares=0)`；有空位时一次就成（实测 `ok=True changed=True`，
+  之后 `hazards_outside` 直接归零）。所以别用 planner 的「主网格没空位」提前判死，
+  直接发 `place_item` 让游戏自己回答（`loop.py` 的 `_hazard` 分支就是这么做的）。
+- 网格满时**只能付钱**：不要为了躲 2-5 点血去丢主武器。`loop` 走 `allow_drops=False`。
+- 这些道具多半是诅咒类（`STICKY HONEY`：`item_type [52]`、1 格、`onUse→Destroy`、
+  `onTurnEnd→ItemStatusEffect(locked)`；`GOO` 同族），**塞进去是留着诅咒、留外面是扣血**，
+  所以「值不值得塞」要按 `damage` 和道具价值比，不能一律塞。
+- `GOO` 会叠：实测一局里 `damage` 涨到 15、19，那时塞一件只能降一档，
+  真正该做的是「别让自己在事件前把背包塞满」。
+
+
+
 
 
 
