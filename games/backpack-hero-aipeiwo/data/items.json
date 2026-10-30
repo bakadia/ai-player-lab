@@ -195,14 +195,14 @@
     },
     "DART": {
       "block_sum": 0,
-      "damage_sum": 110,
+      "damage_sum": 130,
       "effects": {
         "status:rage:enemy": {
           "count": 2,
           "sum": 2.0
         }
       },
-      "samples": 5
+      "samples": 6
     },
     "DEBUFF POTION": {
       "block_sum": 0,
@@ -313,14 +313,14 @@
     "MACHETE": {
       "absorbed_sum": 3,
       "block_sum": 0,
-      "damage_sum": 15,
+      "damage_sum": 36,
       "effects": {
         "status:rage:enemy": {
           "count": 3,
           "sum": 3.0
         }
       },
-      "samples": 3
+      "samples": 7
     },
     "MAGICAL HERB": {
       "block_sum": 0,
@@ -411,10 +411,10 @@
       "samples": 1
     },
     "ROUGH BUCKLER": {
-      "block_sum": 5747,
+      "block_sum": 5782,
       "damage_sum": 0,
       "effects": {},
-      "samples": 821
+      "samples": 826
     },
     "ROW CHAIN STAR": {
       "block_sum": 0,
@@ -567,9 +567,9 @@
       "samples": 3
     },
     "WOODEN SWORD": {
-      "absorbed_sum": 2114,
+      "absorbed_sum": 2128,
       "block_sum": 0,
-      "damage_sum": 9789,
+      "damage_sum": 9876,
       "effects": {
         "gold": {
           "count": 5,
@@ -616,7 +616,7 @@
           "sum": 3.0
         }
       },
-      "samples": 1860
+      "samples": 1875
     }
   },
   "note": "均值是踩坑记录，不是官方数据：样本少时波动大，别当精确值用；effects 来自结构化战斗回执（SPIKE-09）",
